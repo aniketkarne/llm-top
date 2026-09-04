@@ -1,0 +1,20 @@
+# Build artifacts
+/bin/
+*.exe
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local state
+*.db
+*.sqlite
+sessions.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
