@@ -1,0 +1,203 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 700" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Mono', 'JetBrains Mono', Menlo, monospace" role="img" aria-label="llm-top terminal dashboard mockup">
+  <defs>
+    <!-- Background grid -->
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M 32 0 L 0 0 0 32" fill="none" stroke="#1a2138" stroke-width="0.6"/>
+    </pattern>
+
+    <!-- Window drop shadow -->
+    <filter id="windowShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6"/>
+      <feOffset dx="0" dy="4" result="offsetblur"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.6"/></feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Logo hexagon -->
+    <symbol id="logoMark" viewBox="0 0 64 64">
+      <path d="M32 4 L57 18 L57 46 L32 60 L7 46 L7 18 Z"
+            fill="none" stroke="#5B8DEF" stroke-width="2.4" stroke-linejoin="round"/>
+      <text x="32" y="40" text-anchor="middle" font-family="monospace" font-size="22" font-weight="700" fill="#5B8DEF">&gt;_</text>
+      <circle cx="32" cy="14" r="1.6" fill="#5B8DEF"/>
+    </symbol>
+
+    <!-- Status dot pulse -->
+    <radialGradient id="dotGreen" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0.4"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Page background -->
+  <rect width="1280" height="700" fill="#0F1421"/>
+  <rect width="1280" height="700" fill="url(#grid)" opacity="0.55"/>
+
+  <!-- ============== HEADER ROW ============== -->
+  <!-- Logo -->
+  <use href="#logoMark" x="48" y="44" width="56" height="56"/>
+
+  <!-- Wordmark + version -->
+  <text x="118" y="76" font-size="36" font-weight="700" fill="#E8ECF4" letter-spacing="-0.5">llm-top</text>
+  <!-- version pill -->
+  <rect x="258" y="56" width="68" height="22" rx="11" fill="#1B2238" stroke="#2A3454" stroke-width="1"/>
+  <text x="292" y="71" text-anchor="middle" font-size="11" font-weight="600" fill="#7CC4FF" letter-spacing="0.5">v0.1.0</text>
+
+  <!-- tagline -->
+  <text x="118" y="100" font-size="14" fill="#6B7595" font-weight="400">Terminal-native, real-time observability &amp; metrics for LLM calls</text>
+
+  <!-- Right header pills -->
+  <!-- PROXY pill -->
+  <rect x="952" y="58" width="148" height="28" rx="14" fill="#1B2238" stroke="#2A3454" stroke-width="1"/>
+  <circle cx="970" cy="72" r="4" fill="url(#dotGreen)"/>
+  <circle cx="970" cy="72" r="2.2" fill="#10B981"/>
+  <text x="984" y="76" font-size="12" font-weight="700" fill="#9BA4BD" letter-spacing="0.8">PROXY  :8080</text>
+
+  <!-- ZERO-DEPENDENCY pill -->
+  <rect x="1108" y="58" width="148" height="28" rx="14" fill="#1B2238" stroke="#2A3454" stroke-width="1"/>
+  <text x="1182" y="76" text-anchor="middle" font-size="11" font-weight="700" fill="#9BA4BD" letter-spacing="0.8">ZERO-DEPENDENCY</text>
+
+  <!-- ============== TERMINAL WINDOW ============== -->
+  <g filter="url(#windowShadow)">
+    <rect x="80" y="138" width="1120" height="500" rx="14" fill="#0E1320" stroke="#1F2742" stroke-width="1.4"/>
+    <!-- title bar -->
+    <rect x="80" y="138" width="1120" height="34" rx="14" fill="#161C2D"/>
+    <rect x="80" y="158" width="1120" height="14" fill="#161C2D"/>
+    <line x1="80" y1="172" x2="1200" y2="172" stroke="#1F2742" stroke-width="1"/>
+    <!-- traffic lights -->
+    <circle cx="106" cy="155" r="6" fill="#FF5F57"/>
+    <circle cx="124" cy="155" r="6" fill="#FEBC2E"/>
+    <circle cx="142" cy="155" r="6" fill="#28C840"/>
+    <!-- title text -->
+    <text x="640" y="160" text-anchor="middle" font-size="11.5" fill="#7A849E" font-weight="500" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace">llm-top  |  127.0.0.1:8080  |  listening (OpenAI / Anthropic / Ollama)</text>
+  </g>
+
+  <!-- ============== STATS BAR ============== -->
+  <g>
+    <rect x="104" y="194" width="1072" height="48" rx="6" fill="#121828" stroke="#1F2742" stroke-width="1"/>
+    <text x="132" y="223" font-size="11" font-weight="700" fill="#6B7595" letter-spacing="0.8">REQ/MIN</text>
+    <text x="208" y="223" font-size="16" font-weight="700" fill="#7CC4FF">42</text>
+
+    <line x1="276" y1="206" x2="276" y2="230" stroke="#1F2742"/>
+
+    <text x="304" y="223" font-size="11" font-weight="700" fill="#6B7595" letter-spacing="0.8">AVG  TTFT</text>
+    <text x="382" y="223" font-size="16" font-weight="700" fill="#10B981">214ms</text>
+
+    <line x1="468" y1="206" x2="468" y2="230" stroke="#1F2742"/>
+
+    <text x="496" y="223" font-size="11" font-weight="700" fill="#6B7595" letter-spacing="0.8">TOKEN/SEC</text>
+    <text x="586" y="223" font-size="16" font-weight="700" fill="#C589E8">86.4</text>
+
+    <line x1="664" y1="206" x2="664" y2="230" stroke="#1F2742"/>
+
+    <text x="692" y="223" font-size="11" font-weight="700" fill="#6B7595" letter-spacing="0.8">SESSION TOKENS</text>
+    <text x="848" y="223" font-size="16" font-weight="700" fill="#E8ECF4">148,920</text>
+
+    <line x1="956" y1="206" x2="956" y2="230" stroke="#1F2742"/>
+
+    <text x="984" y="223" font-size="11" font-weight="700" fill="#6B7595" letter-spacing="0.8">EST.  COST</text>
+    <text x="1056" y="223" font-size="16" font-weight="700" fill="#FFB547">$0.3421</text>
+
+    <!-- LIVE indicator -->
+    <circle cx="1138" cy="218" r="4" fill="#10B981"/>
+    <text x="1150" y="223" font-size="13" font-weight="700" fill="#10B981">LIVE</text>
+  </g>
+
+  <!-- ============== LEFT PANEL: REQUEST TABLE ============== -->
+  <g>
+    <rect x="104" y="258" width="636" height="332" rx="8" fill="#101728" stroke="#1F2742" stroke-width="1"/>
+
+    <!-- table header -->
+    <line x1="104" y1="294" x2="740" y2="294" stroke="#1F2742"/>
+    <g font-size="10" font-weight="700" fill="#6B7595" letter-spacing="0.8">
+      <text x="132" y="282">STATUS</text>
+      <text x="208" y="282">PROVIDER / MODEL</text>
+      <text x="416" y="282">TTFT</text>
+      <text x="500" y="282">LATENCY</text>
+      <text x="592" y="282">TOKENS</text>
+      <text x="668" y="282">COST</text>
+    </g>
+
+    <!-- Row 1 (selected, highlighted) -->
+    <rect x="112" y="306" width="620" height="36" rx="4" fill="#172244" stroke="#3B5BCC" stroke-width="1"/>
+    <text x="132" y="328" font-size="13" font-weight="700" fill="#10B981">200 OK</text>
+    <text x="208" y="328" font-size="13" fill="#E8ECF4">gpt-4o-mini</text>
+    <text x="416" y="328" font-size="13" fill="#10B981">182ms</text>
+    <text x="500" y="328" font-size="13" fill="#E8ECF4">1.24s</text>
+    <text x="592" y="328" font-size="13" fill="#7CC4FF">842</text>
+    <text x="668" y="328" font-size="13" fill="#FFB547">$0.0012</text>
+
+    <!-- Row 2 -->
+    <text x="132" y="362" font-size="13" font-weight="700" fill="#10B981">200 OK</text>
+    <text x="208" y="362" font-size="13" fill="#E8ECF4">claude-3-5-sonnet</text>
+    <text x="416" y="362" font-size="13" fill="#FFB547">340ms</text>
+    <text x="500" y="362" font-size="13" fill="#E8ECF4">2.88s</text>
+    <text x="592" y="362" font-size="13" fill="#7CC4FF">2,140</text>
+    <text x="668" y="362" font-size="13" fill="#FFB547">$0.0094</text>
+
+    <!-- Row 3 -->
+    <text x="132" y="394" font-size="13" font-weight="700" fill="#10B981">200 OK</text>
+    <text x="208" y="394" font-size="13" fill="#E8ECF4">ollama/llama3.2</text>
+    <text x="416" y="394" font-size="13" fill="#10B981">45ms</text>
+    <text x="500" y="394" font-size="13" fill="#E8ECF4">890ms</text>
+    <text x="592" y="394" font-size="13" fill="#7CC4FF">412</text>
+    <text x="668" y="394" font-size="13" fill="#9BA4BD">local</text>
+
+    <!-- Row 4 (error) -->
+    <text x="132" y="426" font-size="13" font-weight="700" fill="#FF6B6B">429 ERR</text>
+    <text x="208" y="426" font-size="13" fill="#E8ECF4">gpt-4o</text>
+    <text x="416" y="426" font-size="13" fill="#9BA4BD">—</text>
+    <text x="500" y="426" font-size="13" fill="#E8ECF4">82ms</text>
+    <text x="592" y="426" font-size="13" fill="#9BA4BD">0</text>
+    <text x="668" y="426" font-size="13" fill="#9BA4BD">$0.0000</text>
+
+    <!-- Row 5 -->
+    <text x="132" y="458" font-size="13" font-weight="700" fill="#10B981">200 OK</text>
+    <text x="208" y="458" font-size="13" fill="#E8ECF4">gpt-4o-mini</text>
+    <text x="416" y="458" font-size="13" fill="#10B981">195ms</text>
+    <text x="500" y="458" font-size="13" fill="#E8ECF4">1.05s</text>
+    <text x="592" y="458" font-size="13" fill="#7CC4FF">610</text>
+    <text x="668" y="458" font-size="13" fill="#FFB547">$0.0008</text>
+
+    <!-- Keymap footer -->
+    <line x1="104" y1="554" x2="740" y2="554" stroke="#1F2742"/>
+    <g font-size="11" fill="#6B7595">
+      <text x="132" y="574">[</text><text x="140" y="574" fill="#9BA4BD">↑/↓</text><text x="156" y="574">] Navigate  [</text><text x="220" y="574" fill="#9BA4BD">Enter</text><text x="252" y="574">] Inspect  [</text><text x="324" y="574" fill="#9BA4BD">F</text><text x="335" y="574">] Filter  [</text><text x="385" y="574" fill="#9BA4BD">C</text><text x="396" y="574">] Clear  [</text><text x="446" y="574" fill="#9BA4BD">Q</text><text x="457" y="574">] Quit</text>
+    </g>
+  </g>
+
+  <!-- ============== RIGHT PANEL: PROMPT INSPECTOR ============== -->
+  <g>
+    <rect x="752" y="258" width="424" height="332" rx="8" fill="#101728" stroke="#1F2742" stroke-width="1"/>
+
+    <!-- panel header -->
+    <text x="772" y="282" font-size="11" font-weight="700" fill="#7CC4FF" letter-spacing="0.8">PROMPT / RESPONSE INSPECTOR</text>
+    <text x="1156" y="282" text-anchor="end" font-size="11" fill="#6B7595">req_9f1a</text>
+
+    <line x1="752" y1="294" x2="1176" y2="294" stroke="#1F2742"/>
+
+    <!-- SYSTEM PROMPT block -->
+    <text x="772" y="316" font-size="11" font-weight="700" fill="#9BA4BD">▾ SYSTEM PROMPT</text>
+    <text x="908" y="316" font-size="10" fill="#6B7595">(18 TOKENS)</text>
+    <rect x="772" y="326" width="384" height="40" rx="4" fill="#0B1020" stroke="#1F2742"/>
+    <text x="784" y="350" font-size="12" fill="#7A849E">You are a resilient SQL generation assistant...</text>
+
+    <!-- USER INPUT block -->
+    <text x="772" y="386" font-size="11" font-weight="700" fill="#9BA4BD">▾ USER INPUT</text>
+    <text x="864" y="386" font-size="10" fill="#6B7595">(32 TOKENS)</text>
+    <rect x="772" y="396" width="384" height="58" rx="4" fill="#0B1020" stroke="#1F2742"/>
+    <text x="784" y="420" font-size="12" fill="#E8ECF4">Find the top 5 customers who spent &gt; $500</text>
+    <text x="784" y="440" font-size="12" fill="#E8ECF4">in Q3 2024 ordered by volume.</text>
+
+    <!-- STREAMING COMPLETION block -->
+    <text x="772" y="476" font-size="11" font-weight="700" fill="#10B981">▲ STREAMING COMPLETION</text>
+    <text x="956" y="476" font-size="10" fill="#6B7595">(792 TOKENS)</text>
+    <rect x="772" y="486" width="384" height="92" rx="4" fill="#0B1020" stroke="#1F2742"/>
+    <g font-size="12" font-family="monospace">
+      <text x="784" y="510"><tspan fill="#C589E8">SELECT</tspan> <tspan fill="#E8ECF4">c.customer_id, c.name,</tspan>   <tspan fill="#C589E8">SUM</tspan><tspan fill="#E8ECF4"> (o.total)</tspan></text>
+      <text x="784" y="530"><tspan fill="#C589E8">FROM</tspan> <tspan fill="#E8ECF4">customers c </tspan> <tspan fill="#7CC4FF">JOIN</tspan> <tspan fill="#E8ECF4">orders o</tspan> <tspan fill="#7CC4FF">...</tspan><tspan fill="#7CC4FF">▌</tspan></text>
+    </g>
+  </g>
+</svg>

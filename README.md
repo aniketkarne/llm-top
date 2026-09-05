@@ -13,6 +13,10 @@
   <b>101 tests pass.</b> Single static binary. <b>Zero dependencies</b> at runtime — just point your code at the local proxy and watch every LLM call live.
 </p>
 
+<p align="center">
+  <img src="assets/llm-top-hero.svg" alt="llm-top terminal dashboard — live request table, TTFT/latency/token metrics, prompt/response inspector" width="100%">
+</p>
+
 ---
 
 # llm-top
