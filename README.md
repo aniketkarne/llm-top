@@ -13,6 +13,8 @@
   <b>101 tests pass.</b> Single static binary. <b>Zero dependencies</b> at runtime — just point your code at the local proxy and watch every LLM call live.
 </p>
 
+<img width="1146" height="569" alt="image" src="https://github.com/user-attachments/assets/faef2d1a-2e59-449a-94c3-6e21a5d23f52" />
+
 ---
 
 # llm-top
