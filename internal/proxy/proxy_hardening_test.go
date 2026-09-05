@@ -154,19 +154,12 @@ func TestLargeStreamingResponse(t *testing.T) {
 		t.Fatalf("POST: %v", err)
 	}
 	defer resp.Body.Close()
-	count := 0
-	scanner := bytes.NewBuffer(nil)
-	for {
-		buf2 := make([]byte, 1024)
-		n, _ := resp.Body.Read(buf2)
-		if n == 0 {
-			break
-		}
-		count += bytes.Count(buf2[:n], []byte("data:"))
-		scanner.Write(buf2[:n])
-	}
-	if count < 200 {
-		t.Errorf("expected >= 200 SSE events, got %d", count)
+	fullBody, _ := io.ReadAll(resp.Body)
+	// Count events robustly by counting complete "\n\n" separators plus 1.
+	// Each SSE event ends with a blank line; [DONE] counts as one too.
+	sepCount := bytes.Count(fullBody, []byte("\n\n"))
+	if sepCount < 200 {
+		t.Errorf("expected >= 200 SSE events, got %d (by separator count)", sepCount)
 	}
 	// Metrics should reflect the work.
 	summary := rec.Summarize()

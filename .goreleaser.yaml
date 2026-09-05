@@ -44,26 +44,6 @@ builds:
         goarch: '386'
       - goos: windows
         goarch: arm64
-  - id: llm-top-sqlite
-    main: ./cmd/llm-top
-    binary: llm-top
-    env:
-      - CGO_ENABLED=0
-    mod_timestamp: '{{ .CommitTimestamp }}'
-    flags:
-      - -trimpath
-      - -tags=sqlite
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.CommitDate}}
-    goos:
-      - darwin
-      - linux
-    goarch:
-      - amd64
-      - arm64
 
 archives:
   - id: default
@@ -72,11 +52,6 @@ archives:
     files:
       - README.md
       - LICENSE
-  - id: sqlite
-    ids:
-      - llm-top-sqlite
-    formats: [tar.gz]
-    name_template: "{{ .Binary }}-sqlite_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 nfpms:
   - id: packages
@@ -93,20 +68,9 @@ nfpms:
     priority: "optional"
     bindir: /usr/bin
 
-brews:
-  - name: llm-top
-    repository:
-      owner: aniketkarne-com
-      name: homebrew-tap
-      branch: main
-      token: "{{ .Env.GITHUB_TOKEN }}"
-    homepage: "https://github.com/aniketkarne-com/llm-top"
-    description: "OpenAI-compatible HTTP reverse proxy with TUI dashboard, SSE metrics, and prompt capture."
-    license: "MIT"
-    test: |
-      system "#{bin}/llm-top version"
-    install: |
-      bin.install "llm-top"
+# Homebrew tap: disabled in this initial release.
+# When you're ready to publish a tap, follow the goreleaser-brew pattern at
+# https://goreleaser.com/customization/homebrew/ using an external tap repo.
 
 release:
   github:
