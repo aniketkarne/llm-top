@@ -1,5 +1,6 @@
 <p align="center">
-  <img src="assets/llm-top-logo.jpg" alt="llm-top" width="160">
+  <img width="626" height="274" alt="image" src="https://github.com/user-attachments/assets/5d01935f-1619-4191-a243-2ce763ba43d7" />
+
 </p>
 
 <p align="center">
