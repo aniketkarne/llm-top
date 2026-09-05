@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 
 	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
 	"github.com/aniketkarne-com/llm-top/internal/config"
+	"github.com/aniketkarne-com/llm-top/internal/demo"
 	"github.com/aniketkarne-com/llm-top/internal/metrics"
 	"github.com/aniketkarne-com/llm-top/internal/proxy"
 	"github.com/aniketkarne-com/llm-top/internal/redactor"
@@ -59,6 +61,8 @@ func run(args []string) error {
 		case "help", "-help", "--help", "-h":
 			printUsage(os.Stdout)
 			return nil
+		case "demo":
+			return runDemo()
 		}
 	}
 
@@ -195,7 +199,22 @@ func isTerminal(f *os.File) bool {
 	return true
 }
 
-func printUsage(w *os.File) {
+// runDemo executes the zero-deps showcase. See internal/demo for details.
+// Defaults are tuned to finish in ~300ms so this works as a one-line
+// first-run experience.
+func runDemo() error {
+	res, err := demo.Run(demo.Options{})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr,
+		"\nllm-top demo complete: %d requests, %d output tokens, %d ring entries, %s total\n",
+		res.Requests, res.OutputTokens, res.BufferEntries, res.Duration.Round(time.Millisecond),
+	)
+	return nil
+}
+
+func printUsage(w io.Writer) {
 	fmt.Fprintln(w, strings.TrimSpace(`
 llm-top — OpenAI-compatible HTTP proxy with TUI dashboard, SSE metrics, and prompt capture.
 
@@ -206,6 +225,7 @@ Subcommands:
   proxy        run only the HTTP proxy (no TUI)
   ui           run only the TUI (connects to an existing proxy)
   integrated   run proxy + TUI together (default)
+  demo         zero-deps end-to-end showcase (no API key, no network)
   version      print version and exit
   help         print this message
 

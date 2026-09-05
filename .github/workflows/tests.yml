@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ["1.21", "1.22", "1.23"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+      - name: Verify modules
+        run: go mod download && go mod verify
+      - name: go vet
+        run: go vet ./...
+      - name: go build (default)
+        run: go build ./...
+      - name: go build (sqlite tag)
+        run: go build -tags sqlite ./...
+      - name: go test
+        run: go test -count=1 ./...
+      - name: go test -race
+        run: go test -race -count=1 ./...
+      - name: CLI smoke
+        run: |
+          go build -o /tmp/llm-top ./cmd/llm-top
+          /tmp/llm-top version
+          /tmp/llm-top help
+          /tmp/llm-top --help

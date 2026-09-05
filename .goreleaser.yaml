@@ -1,0 +1,137 @@
+# GoReleaser config — produces multi-platform binaries + archives + checksums
+# + GitHub Release on tag push. Triggered by .github/workflows/release.yml.
+#
+# Run locally with:
+#   goreleaser release --snapshot --clean
+# which writes artifacts to ./dist/ without publishing.
+
+version: 2
+
+project_name: llm-top
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: llm-top
+    main: ./cmd/llm-top
+    binary: llm-top
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.CommitDate}}
+    goos:
+      - darwin
+      - windows
+      - linux
+      - openbsd
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+      - '386'
+    ignore:
+      - goos: openbsd
+        goarch: '386'
+      - goos: freebsd
+        goarch: '386'
+      - goos: windows
+        goarch: arm64
+  - id: llm-top-sqlite
+    main: ./cmd/llm-top
+    binary: llm-top
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+      - -tags=sqlite
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.CommitDate}}
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+  - id: sqlite
+    ids:
+      - llm-top-sqlite
+    formats: [tar.gz]
+    name_template: "{{ .Binary }}-sqlite_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+nfpms:
+  - id: packages
+    package_name: llm-top
+    file_name_template: "{{ .ConventionalFileName }}"
+    formats:
+      - deb
+      - rpm
+    maintainer: "Aniket Karne <aniketkarne@users.noreply.github.com>"
+    description: "OpenAI-compatible HTTP reverse proxy with TUI dashboard, SSE metrics, and prompt capture."
+    homepage: "https://github.com/aniketkarne-com/llm-top"
+    license: "MIT"
+    section: "utils"
+    priority: "optional"
+    bindir: /usr/bin
+
+brews:
+  - name: llm-top
+    repository:
+      owner: aniketkarne-com
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    homepage: "https://github.com/aniketkarne-com/llm-top"
+    description: "OpenAI-compatible HTTP reverse proxy with TUI dashboard, SSE metrics, and prompt capture."
+    license: "MIT"
+    test: |
+      system "#{bin}/llm-top version"
+    install: |
+      bin.install "llm-top"
+
+release:
+  github:
+    owner: aniketkarne-com
+    name: llm-top
+  prerelease: auto
+  draft: false
+  name_template: "{{ .ProjectName }} v{{ .Version }}"
+  header: |
+    ## llm-top {{ .Tag }}
+    See the [README](https://github.com/aniketkarne-com/llm-top#readme) for full docs.
+  footer: |
+    **Full Changelog**: https://github.com/aniketkarne-com/llm-top/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge pull request"
+      - "^Merge branch"
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+checksum:
+  algorithm: sha256
