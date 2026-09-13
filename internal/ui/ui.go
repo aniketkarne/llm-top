@@ -23,22 +23,9 @@ import (
 )
 
 // StatsProvider exposes the runtime counters the UI displays.
-type StatsProvider interface {
-	Stats() (total, errors uint64)
-}
+// Defined in model.go alongside the rest of the Model type.
 
-// Model holds the shared state the UI renders.
-type Model struct {
-	Recorder *metrics.Recorder
-	Ring     *ring.Buffer
-	Stats    StatsProvider
-	Started  time.Time
-	Upstream string
-	Listen   string
-	Width    int
-	Height   int
-	NoColor  bool
-}
+// Model holds the shared state the UI renders. Defined in model.go.
 
 // New constructs a Model. Width/Height of 0 mean "use terminal size" /
 // "no size limit".

@@ -1,0 +1,37 @@
+# Minimal Prometheus scrape config for llm-top.
+#
+# Drop this into your existing prometheus.yml under `scrape_configs:`
+# or run `prometheus --config.file=examples/prometheus-scrape.yml`
+# from the llm-top repo root to scrape the dev proxy.
+#
+# llm-top exposes Prometheus text format on
+#   <listen-addr>/metrics
+# (default 127.0.0.1:7777/metrics). No auth, no TLS — same port
+# as the proxy itself.
+
+global:
+  scrape_interval: 15s     # honor the plan: 15s cadence
+  evaluation_interval: 15s
+  external_labels:
+    monitor: llm-top-dev
+
+scrape_configs:
+  - job_name: llm-top
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      # If your proxy is not on the loopback, change to its real address.
+      - targets:
+          - '127.0.0.1:7777'
+        labels:
+          env: dev
+          tool: llm-top
+
+  # Optional: when you run multiple proxies (e.g. one per upstream
+  # provider), add a second entry with a different `job_name`. The
+  # `instance` label is automatically populated with the target host.
+  #
+  # - job_name: llm-top-anthropic
+  #   metrics_path: /metrics
+  #   static_configs:
+  #     - targets: ['127.0.0.1:7778']

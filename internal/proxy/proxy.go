@@ -21,17 +21,40 @@ import (
 
 	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
 	"github.com/aniketkarne-com/llm-top/internal/metrics"
+	"github.com/aniketkarne-com/llm-top/internal/pricing"
 	"github.com/aniketkarne-com/llm-top/internal/redactor"
 	"github.com/aniketkarne-com/llm-top/internal/sse"
 )
 
+// RequestInserter is the subset of *store.Store that the proxy uses to persist
+// v0.2.0 structured Request records. Defining it as an interface here keeps
+// the proxy package free of an import cycle on the store package.
+type RequestInserter interface {
+	Insert(r Request) error
+}
+
+// PostPersistHook is invoked after every successful persist (i.e.
+// after the Request has been written to the store). The hook is
+// passed the Request that was just persisted. Used by main.go to
+// wire the anomaly detector into the proxy hot path without
+// coupling the proxy package to the anomaly package.
+//
+// The hook is intentionally `func(Request)` rather than an interface
+// so this package stays out of the anomaly import graph entirely.
+// Anomaly types flow through the wire as opaque values when needed.
+type PostPersistHook func(Request)
+
 // Server is the proxy HTTP server with attached state.
 type Server struct {
-	cfg      Config
-	recorder *metrics.Recorder
-	ring     *ring.Buffer
-	red      *redactor.Redactor
-	client   *http.Client
+	cfg            Config
+	recorder       *metrics.Recorder
+	ring           *ring.Buffer
+	red            *redactor.Redactor
+	client         *http.Client
+	prices         pricing.Table
+	store          RequestInserter
+	postPersist    PostPersistHook
+	metricsHandler http.Handler // optional; mounted at /metrics when set
 
 	totalRequests atomic.Uint64
 	totalErrors   atomic.Uint64
@@ -43,10 +66,13 @@ type Config struct {
 	UpstreamBaseURL string
 	UpstreamAPIKey  string
 	BufferSize      int
+	SessionID       string
+	Pricing         pricing.Table
 }
 
 // New constructs a Server. The Recorder, Buffer, and Redactor are shared with
-// the TUI so both views observe the same state.
+// the TUI so both views observe the same state. The store is optional; when
+// non-nil, every proxied request is persisted as a structured Request.
 func New(cfg Config, rec *metrics.Recorder, ring *ring.Buffer, red *redactor.Redactor) *Server {
 	if cfg.BufferSize <= 0 {
 		cfg.BufferSize = 500
@@ -57,13 +83,45 @@ func New(cfg Config, rec *metrics.Recorder, ring *ring.Buffer, red *redactor.Red
 		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: true,
 	}
+	prices := cfg.Pricing
+	if prices.IsZero() {
+		prices = pricing.Defaults()
+	}
 	return &Server{
 		cfg:      cfg,
 		recorder: rec,
 		ring:     ring,
 		red:      red,
+		prices:   prices,
+		store:    nil, // set via WithStore if persistence is desired
 		client:   &http.Client{Transport: tr},
 	}
+}
+
+// WithStore attaches a RequestStore. Returns the receiver for chaining.
+func (s *Server) WithStore(st RequestInserter) *Server {
+	s.store = st
+	return s
+}
+
+// WithPostPersistHook registers a callback that fires after every
+// successful store Insert. Returns the receiver for chaining.
+//
+// Typical use: main.go wires a hook that runs the anomaly detector
+// and persists any anomalies it detects, keeping the proxy package
+// decoupled from internal/anomaly.
+func (s *Server) WithPostPersistHook(h PostPersistHook) *Server {
+	s.postPersist = h
+	return s
+}
+
+// WithMetricsHandler attaches an http.Handler that will be served
+// at GET /metrics. Typical use is prom.Handler(rec, src); main.go
+// owns the wiring so the proxy package doesn't import internal/prom.
+// Pass nil to disable the metrics endpoint.
+func (s *Server) WithMetricsHandler(h http.Handler) *Server {
+	s.metricsHandler = h
+	return s
 }
 
 // Handler returns the http.Handler that serves proxy traffic.
@@ -71,6 +129,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/", s.handleProxy)
 	mux.HandleFunc("/", s.handleRoot)
+	if s.metricsHandler != nil {
+		mux.Handle("/metrics", s.metricsHandler)
+	}
 	return mux
 }
 
@@ -110,7 +171,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"service":     "llm-top",
-			"version":     "0.1.0",
+			"version":     "0.2.0",
 			"upstream":    s.cfg.UpstreamBaseURL,
 			"requests":    s.totalRequests.Load(),
 			"errors":      s.totalErrors.Load(),
@@ -126,10 +187,32 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	s.totalRequests.Add(1)
 	start := time.Now()
 
+	rec := Request{
+		ID:        NewID(),
+		StartedAt: start.UTC(),
+		Method:    r.Method,
+		Path:      r.URL.Path,
+		Upstream:  s.cfg.UpstreamBaseURL,
+		Provider:  ProviderFromUpstream(s.cfg.UpstreamBaseURL),
+		SessionID: s.cfg.SessionID,
+	}
+	// X-Request-Id so clients can correlate immediately. If the client sent
+	// one, honor it; otherwise use our freshly generated id.
+	clientID := r.Header.Get("X-Request-Id")
+	if clientID != "" {
+		rec.ID = clientID
+	}
+	w.Header().Set("X-Request-Id", rec.ID)
+
 	upstream, err := url.Parse(s.cfg.UpstreamBaseURL)
 	if err != nil {
 		http.Error(w, "bad upstream config", http.StatusInternalServerError)
 		s.totalErrors.Add(1)
+		rec.Error = "bad upstream config"
+		rec.StatusCode = http.StatusInternalServerError
+		rec.EndedAt = time.Now().UTC()
+		rec.TotalMillis = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()
+		s.persist(rec)
 		return
 	}
 	target := *r.URL
@@ -141,15 +224,21 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		reqBody, _ = io.ReadAll(r.Body)
 		_ = r.Body.Close()
 	}
+	rec.Model = modelFromBody(reqBody)
+	rec.PromptHash = HashPrompt(reqBody)
+	redacted := s.red.Apply(string(reqBody))
+	rec.RequestBody = redacted
 	if s.ring != nil {
-		s.ring.Append("request", modelFromBody(reqBody), s.red.Apply(string(reqBody)))
+		s.ring.Append("request", rec.Model, redacted)
 	}
 	inTok := metrics.EstimateTokens(string(reqBody))
+	rec.PromptTokens = inTok
 
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), bytes.NewReader(reqBody))
 	if err != nil {
 		http.Error(w, "build upstream request: "+err.Error(), http.StatusInternalServerError)
-		s.recordError(r, start, 0, inTok, "build upstream: "+err.Error())
+		s.totalErrors.Add(1)
+		s.recordError(&rec, r, http.StatusInternalServerError, inTok, "build upstream: "+err.Error())
 		return
 	}
 	for k, vv := range r.Header {
@@ -168,7 +257,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.client.Do(upReq)
 	if err != nil {
 		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
-		s.recordError(r, start, 0, inTok, err.Error())
+		s.totalErrors.Add(1)
+		s.recordError(&rec, r, http.StatusBadGateway, inTok, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -183,21 +273,26 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add(k, v)
 		}
 	}
+	// Preserve the request id from the upstream if it sent one, but our
+	// own header (set earlier) wins.
+	w.Header().Set("X-Request-Id", rec.ID)
 
 	isStream := isStreamingResponse(resp)
+	rec.Stream = isStream
 	w.WriteHeader(resp.StatusCode)
+	rec.StatusCode = resp.StatusCode
 
 	if isStream {
-		s.handleStream(w, resp, r, start, inTok)
+		s.handleStream(w, resp, r, &rec, start, inTok)
 	} else {
-		s.handleJSON(w, resp, r, start, inTok)
+		s.handleJSON(w, resp, r, &rec, start, inTok)
 	}
 }
 
 // handleStream copies the upstream SSE bytes to the client while measuring
 // time-to-first-token, accumulating the textual response, and recording the
 // total response time.
-func (s *Server) handleStream(w http.ResponseWriter, resp *http.Response, r *http.Request, start time.Time, inTok int) {
+func (s *Server) handleStream(w http.ResponseWriter, resp *http.Response, r *http.Request, rec *Request, start time.Time, inTok int) {
 	flusher, _ := w.(http.Flusher)
 
 	var (
@@ -236,66 +331,116 @@ func (s *Server) handleStream(w http.ResponseWriter, resp *http.Response, r *htt
 			if len(preview) > 256 {
 				preview = preview[:256] + "…"
 			}
-			s.ring.Append("response:preview", modelFromPath(r.URL.Path), s.red.Apply(preview))
+			s.ring.Append("response:preview", rec.Model, s.red.Apply(preview))
 			previewDone = true
 		}
 	}
 
 	full := outBuilder.String()
 	if s.ring != nil && full != "" {
-		s.ring.Append("response", modelFromPath(r.URL.Path), s.red.Apply(full))
+		s.ring.Append("response", rec.Model, s.red.Apply(full))
+	}
+	rec.TTFTMillis = firstToken.Milliseconds()
+	rec.TotalMillis = time.Since(start).Milliseconds()
+	rec.EndedAt = time.Now().UTC()
+	rec.OutputTokens = metrics.EstimateTokens(full)
+	rec.ResponseBody = s.red.Apply(full)
+	if cost, ok := s.prices.Cost(rec.Model, inTok, rec.OutputTokens); ok {
+		rec.CostUSD = cost
 	}
 	s.recorder.Add(metrics.Record{
 		Start:     start,
-		End:       time.Now(),
+		End:       rec.EndedAt,
 		TTFT:      firstToken,
 		Total:     time.Since(start),
 		PromptTok: inTok,
-		OutputTok: metrics.EstimateTokens(full),
-		Model:     modelFromPath(r.URL.Path),
+		OutputTok: rec.OutputTokens,
+		Model:     rec.Model,
+		Provider:  rec.Provider,
 		Status:    resp.StatusCode,
 		Path:      r.URL.Path,
 		Stream:    true,
 	})
+	s.persist(*rec)
 }
 
 // handleJSON forwards a non-streaming JSON response and records metrics.
-func (s *Server) handleJSON(w http.ResponseWriter, resp *http.Response, r *http.Request, start time.Time, inTok int) {
+func (s *Server) handleJSON(w http.ResponseWriter, resp *http.Response, r *http.Request, rec *Request, start time.Time, inTok int) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		s.totalErrors.Add(1)
+		rec.Error = err.Error()
+		rec.EndedAt = time.Now().UTC()
+		rec.TotalMillis = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()
+		s.persist(*rec)
 		return
 	}
+	redacted := s.red.Apply(string(body))
 	if s.ring != nil {
-		s.ring.Append("response", modelFromPath(r.URL.Path), s.red.Apply(string(body)))
+		s.ring.Append("response", rec.Model, redacted)
 	}
 	outTok := jsonOutputTokens(body)
+	rec.OutputTokens = outTok
+	rec.ResponseBody = redacted
+	rec.EndedAt = time.Now().UTC()
+	rec.TotalMillis = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()
+	if cost, ok := s.prices.Cost(rec.Model, inTok, outTok); ok {
+		rec.CostUSD = cost
+	}
 	_, _ = w.Write(body)
 	s.recorder.Add(metrics.Record{
 		Start:     start,
-		End:       time.Now(),
+		End:       rec.EndedAt,
 		Total:     time.Since(start),
 		PromptTok: inTok,
 		OutputTok: outTok,
-		Model:     modelFromPath(r.URL.Path),
+		Model:     rec.Model,
+		Provider:  rec.Provider,
 		Status:    resp.StatusCode,
 		Path:      r.URL.Path,
 		Stream:    false,
 	})
+	s.persist(*rec)
 }
 
-func (s *Server) recordError(r *http.Request, start time.Time, status int, inTok int, msg string) {
-	s.totalErrors.Add(1)
+// recordError finalizes a Request for an error path and persists it.
+func (s *Server) recordError(rec *Request, r *http.Request, status int, inTok int, msg string) {
+	rec.StatusCode = status
+	rec.Error = msg
+	rec.EndedAt = time.Now().UTC()
+	rec.TotalMillis = rec.EndedAt.Sub(rec.StartedAt).Milliseconds()
+	rec.PromptTokens = inTok
 	s.recorder.Add(metrics.Record{
-		Start:     start,
-		End:       time.Now(),
-		Total:     time.Since(start),
+		Start:     rec.StartedAt,
+		End:       rec.EndedAt,
+		Total:     rec.EndedAt.Sub(rec.StartedAt),
 		PromptTok: inTok,
-		Model:     modelFromPath(r.URL.Path),
+		Model:     rec.Model,
+		Provider:  rec.Provider,
 		Status:    status,
 		Path:      r.URL.Path,
 		Err:       msg,
 	})
+	s.persist(*rec)
+}
+
+// persist writes the Request to the configured store, if any. Failures are
+// swallowed; persistence must never break the proxy. (Follow-up: a rate-
+// limited stderr log would help diagnose disk-full / locked-db conditions.)
+func (s *Server) persist(rec Request) {
+	if s.store == nil {
+		return
+	}
+	if err := s.store.Insert(rec); err != nil {
+		return
+	}
+	if s.postPersist != nil {
+		// Hook is fire-and-forget by contract; callers must not
+		// panic or block. main.go wires a hook that runs the
+		// anomaly detector, which is bounded and safe.
+		defer func() { _ = recover() }()
+		s.postPersist(rec)
+	}
 }
 
 // isStreamingResponse returns true if the upstream response is an SSE stream.

@@ -17,7 +17,8 @@ type Record struct {
 	PromptTok int           `json:"prompt_tokens"`
 	OutputTok int           `json:"output_tokens"`
 	Model     string        `json:"model"`
-	Status    int           `json:"status"` // HTTP status of upstream response
+	Provider  string        `json:"provider,omitempty"` // normalized upstream provider (openai, anthropic, local, custom)
+	Status    int           `json:"status"`             // HTTP status of upstream response
 	Path      string        `json:"path"`
 	Stream    bool          `json:"stream"`
 	Err       string        `json:"error,omitempty"`

@@ -1,0 +1,54 @@
+# Minimal one-host Prometheus + Grafana setup for llm-top.
+#
+#   docker compose -f examples/docker-compose.yml up
+#
+# Then open:
+#   - Prometheus: http://localhost:9090  (try the PromQL
+#     `rate(llm_requests_total[5m])`)
+#   - Grafana:    http://localhost:3000  (admin / admin; the
+#     llm-top dashboard is auto-provisioned under "LLM Top / Overview")
+#
+# Assumes llm-top is running on the host with the default listen
+# address (127.0.0.1:7777). Linux uses `network_mode: host`; macOS
+# and Windows (Docker Desktop) need `extra_hosts: host.docker.internal`
+# plus a scrape target of `host.docker.internal:7777`.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: llm-top-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=24h
+    volumes:
+      - ./prometheus-scrape.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    # macOS / Windows users: switch to this block so the container
+    # can reach llm-top running on the host.
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: llm-top-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./grafana-provisioning:/etc/grafana/provisioning:ro
+      - ./grafana-dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:
