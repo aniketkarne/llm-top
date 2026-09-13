@@ -434,3 +434,78 @@ func TestPersistsStructuredRequest(t *testing.T) {
 		t.Errorf("error message missing: %+v", errRecords[0])
 	}
 }
+
+func TestSessionIDPropagatedToRecords(t *testing.T) {
+	// Captures 3 requests through a proxy configured with SessionID
+	// and asserts every persisted Request carries the same SessionID.
+	upstream := startFakeUpstream(t)
+	defer upstream.Close()
+	rec := metrics.NewRecorder()
+	rb := ring.New(500)
+	red := redactor.New()
+	srv := New(Config{
+		UpstreamBaseURL: upstream.URL,
+		UpstreamAPIKey:  "sk-test",
+		BufferSize:      500,
+		SessionID:       "sess-test-001",
+	}, rec, rb, red)
+	st := &stubStore{}
+	srv.WithStore(st)
+	proxy := httptest.NewServer(srv.Handler())
+	defer proxy.Close()
+
+	for i := 0; i < 3; i++ {
+		body := bytes.NewBufferString(`{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hi"}]}`)
+		resp, err := http.Post(proxy.URL+"/v1/chat/completions", "application/json", body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	records := st.Snapshot()
+	if len(records) != 3 {
+		t.Fatalf("want 3 records, got %d", len(records))
+	}
+	for _, r := range records {
+		if r.SessionID != "sess-test-001" {
+			t.Errorf("SessionID lost: %+v", r)
+		}
+	}
+}
+
+func TestEmptySessionIDDoesNotStamp(t *testing.T) {
+	// When the proxy is started without --session, captured requests
+	// should have empty SessionID (so session-scoped queries don't
+	// accidentally match unrelated traffic).
+	upstream := startFakeUpstream(t)
+	defer upstream.Close()
+	rec := metrics.NewRecorder()
+	rb := ring.New(500)
+	red := redactor.New()
+	srv := New(Config{
+		UpstreamBaseURL: upstream.URL,
+		UpstreamAPIKey:  "sk-test",
+		BufferSize:      500,
+		// SessionID intentionally empty.
+	}, rec, rb, red)
+	st := &stubStore{}
+	srv.WithStore(st)
+	proxy := httptest.NewServer(srv.Handler())
+	defer proxy.Close()
+
+	body := bytes.NewBufferString(`{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hi"}]}`)
+	resp, err := http.Post(proxy.URL+"/v1/chat/completions", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	records := st.Snapshot()
+	if len(records) != 1 {
+		t.Fatalf("want 1, got %d", len(records))
+	}
+	if records[0].SessionID != "" {
+		t.Errorf("empty config SessionID leaked into record: %+v", records[0])
+	}
+}

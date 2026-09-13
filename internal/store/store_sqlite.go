@@ -25,7 +25,14 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne-com/llm-top/internal/session"
 )
+
+// Session is an alias for session.Session so callers (CLI, tests)
+// can keep using store.Session in their type references without
+// importing the session package directly. The underlying definition
+// lives in internal/session so the session package owns its API.
+type Session = session.Session
 
 // Event is a row in the legacy `events` table.
 type Event struct {
@@ -106,6 +113,17 @@ func (s *Store) init() error {
 		CREATE INDEX IF NOT EXISTS requests_status_code ON requests(status_code);
 		CREATE INDEX IF NOT EXISTS requests_prompt_hash ON requests(prompt_hash);
 		CREATE INDEX IF NOT EXISTS requests_session_id ON requests(session_id);
+
+		CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL DEFAULT '',
+			label TEXT NOT NULL DEFAULT '',
+			tags TEXT NOT NULL DEFAULT '[]',
+			started_at TEXT NOT NULL,
+			ended_at TEXT
+		);
+		CREATE INDEX IF NOT EXISTS sessions_started_at ON sessions(started_at);
+		CREATE INDEX IF NOT EXISTS sessions_name ON sessions(name);
 	`)
 	if err != nil {
 		return fmt.Errorf("sqlite init: %w", err)
@@ -311,4 +329,171 @@ func scanRequestRows(rows *sql.Rows) (proxy.Request, error) {
 	}
 	r.Stream = stream != 0
 	return r, nil
+}
+
+// --- v0.2.0 SessionStore API ---
+
+// CreateSession inserts a new Session row. Returns ErrSessionActive
+// when a session with ended_at IS NULL already exists (one active
+// session per store, by design — see internal/session.ErrSessionActive).
+func (s *Store) CreateSession(sess Session) error {
+	if sess.ID == "" {
+		return errors.New("store: session id is empty")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Enforce single-active-session invariant: refuse to insert when
+	// an active session already exists. We hold the lock the whole
+	// time so two concurrent inserts can't both win.
+	var existing string
+	err := s.db.QueryRow(`SELECT id FROM sessions WHERE ended_at IS NULL LIMIT 1`).Scan(&existing)
+	if err == nil {
+		return session.ErrSessionActive
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("sqlite check active session: %w", err)
+	}
+
+	tags, err := sessionTagsToJSON(sess.Tags)
+	if err != nil {
+		return err
+	}
+	// SQLite distinguishes NULL from empty string. We use NULL for
+	// "active" sessions and an RFC3339 timestamp for ended ones so
+	// `WHERE ended_at IS NULL` is the canonical active-session query.
+	var endedAt any
+	if !sess.EndedAt.IsZero() {
+		endedAt = sess.EndedAt.UTC().Format(time.RFC3339Nano)
+	}
+	_, err = s.db.Exec(`INSERT INTO sessions(id, name, label, tags, started_at, ended_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		sess.ID, sess.Name, sess.Label, tags,
+		sess.StartedAt.UTC().Format(time.RFC3339Nano), endedAt,
+	)
+	return err
+}
+
+// EndSession sets ended_at on the row identified by id. Returns
+// ErrNotFound when no row matches. We do NOT error on already-ended
+// rows here — the caller (session.Manager) surfaces that condition
+// as session.ErrAlreadyEnded.
+func (s *Store) EndSession(id string, when time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`UPDATE sessions SET ended_at = ? WHERE id = ?`,
+		when.UTC().Format(time.RFC3339Nano), id,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetSession fetches a single Session by id. Returns ErrNotFound when
+// the id is unknown.
+func (s *Store) GetSession(id string) (Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scanSessionRow(s.db.QueryRow(`SELECT id, name, label, tags, started_at, ended_at FROM sessions WHERE id = ?`, id))
+}
+
+// ListSessions returns every Session, newest first. The slice may be
+// empty but never nil on success.
+func (s *Store) ListSessions() ([]Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id, name, label, tags, started_at, ended_at FROM sessions ORDER BY started_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		sess, err := s.scanSessionRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sess)
+	}
+	return out, rows.Err()
+}
+
+// ActiveSession returns the single session with ended_at IS NULL,
+// or ErrNoActiveSession when none exists.
+func (s *Store) ActiveSession() (Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row := s.db.QueryRow(`SELECT id, name, label, tags, started_at, ended_at FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`)
+	sess, err := s.scanSessionRow(row)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return Session{}, session.ErrNoActiveSession
+		}
+		return Session{}, err
+	}
+	return sess, nil
+}
+
+func (s *Store) scanSessionRow(row *sql.Row) (Session, error) {
+	var sess Session
+	var tags string
+	var started string
+	var ended sql.NullString
+	err := row.Scan(&sess.ID, &sess.Name, &sess.Label, &tags, &started, &ended)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Session{}, ErrNotFound
+		}
+		return Session{}, err
+	}
+	return parseSession(sess, tags, started, ended.String), nil
+}
+
+func (s *Store) scanSessionRows(rows *sql.Rows) (Session, error) {
+	var sess Session
+	var tags string
+	var started string
+	var ended sql.NullString
+	err := rows.Scan(&sess.ID, &sess.Name, &sess.Label, &tags, &started, &ended)
+	if err != nil {
+		return Session{}, err
+	}
+	return parseSession(sess, tags, started, ended.String), nil
+}
+
+func parseSession(sess Session, tags, started, ended string) Session {
+	sess.StartedAt, _ = time.Parse(time.RFC3339Nano, started)
+	if ended != "" {
+		sess.EndedAt, _ = time.Parse(time.RFC3339Nano, ended)
+	}
+	sess.Active = sess.EndedAt.IsZero()
+	if tags != "" {
+		var parsed []string
+		if err := json.Unmarshal([]byte(tags), &parsed); err == nil {
+			sess.Tags = parsed
+		}
+	}
+	return sess
+}
+
+// sessionTagsToJSON is a thin wrapper so the session package can
+// stay out of the store's import graph (we only need the canonical
+// JSON encoding behavior).
+func sessionTagsToJSON(tags []string) (string, error) {
+	if tags == nil {
+		return "[]", nil
+	}
+	b, err := json.Marshal(tags)
+	if err != nil {
+		return "", fmt.Errorf("store: marshal session tags: %w", err)
+	}
+	return string(b), nil
 }

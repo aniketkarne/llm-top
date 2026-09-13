@@ -10,9 +10,16 @@ package store
 
 import (
 	"errors"
+	"time"
 
 	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne-com/llm-top/internal/session"
 )
+
+// Session mirrors session.Session on the sqlite build so callers can
+// write store.Session without depending on the session package
+// directly.
+type Session = session.Session
 
 // Event mirrors the SQLite build's row shape (legacy API).
 type Event struct {
@@ -67,3 +74,18 @@ func (s *Store) List(f ListFilter) ([]proxy.Request, error) { return nil, ErrUna
 
 // Recent is unavailable without the sqlite tag.
 func (s *Store) Recent(n int) ([]proxy.Request, error) { return nil, ErrUnavailable }
+
+// CreateSession is unavailable without the sqlite tag.
+func (s *Store) CreateSession(sess Session) error { return ErrUnavailable }
+
+// EndSession is unavailable without the sqlite tag.
+func (s *Store) EndSession(id string, when time.Time) error { return ErrUnavailable }
+
+// GetSession is unavailable without the sqlite tag.
+func (s *Store) GetSession(id string) (Session, error) { return Session{}, ErrUnavailable }
+
+// ListSessions is unavailable without the sqlite tag.
+func (s *Store) ListSessions() ([]Session, error) { return nil, ErrUnavailable }
+
+// ActiveSession is unavailable without the sqlite tag.
+func (s *Store) ActiveSession() (Session, error) { return Session{}, ErrUnavailable }

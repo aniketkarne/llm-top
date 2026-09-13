@@ -36,6 +36,7 @@ import (
 	"github.com/aniketkarne-com/llm-top/internal/proxy"
 	"github.com/aniketkarne-com/llm-top/internal/redactor"
 	"github.com/aniketkarne-com/llm-top/internal/replay"
+	"github.com/aniketkarne-com/llm-top/internal/session"
 	"github.com/aniketkarne-com/llm-top/internal/store"
 	"github.com/aniketkarne-com/llm-top/internal/ui"
 )
@@ -126,6 +127,31 @@ func run(args []string) error {
 				os.Exit(replayExitCode)
 			}
 			return err
+		case "session":
+			rest := filtered[1:]
+			if len(rest) < 1 {
+				return fmt.Errorf("usage: llm-top session <start|list|show|diff|stop> ... (try `llm-top help`)")
+			}
+			switch rest[0] {
+			case "start":
+				return runSessionStart(strings.Join(rest[1:], " "))
+			case "list":
+				return runSessionList(strings.Join(rest[1:], " "))
+			case "show":
+				if len(rest) < 2 {
+					return fmt.Errorf("usage: llm-top session show <id|name> [--sqlite PATH]")
+				}
+				return runSessionShow(rest[1], strings.Join(rest[2:], " "))
+			case "diff":
+				if len(rest) < 3 {
+					return fmt.Errorf("usage: llm-top session diff <a> <b> [--sqlite PATH]")
+				}
+				return runSessionDiff(rest[1], rest[2], strings.Join(rest[3:], " "))
+			case "stop":
+				return runSessionStop(strings.Join(rest[1:], " "))
+			default:
+				return fmt.Errorf("unknown session subcommand %q (try start|list|show|diff|stop)", rest[0])
+			}
 		}
 	}
 
@@ -185,6 +211,7 @@ func run(args []string) error {
 			UpstreamBaseURL: cfg.UpstreamBaseURL,
 			UpstreamAPIKey:  cfg.UpstreamAPIKey,
 			BufferSize:      cfg.BufferSize,
+			SessionID:       cfg.SessionID,
 		}, rec, buf, red)
 		if st != nil {
 			srv.WithStore(st)
@@ -966,4 +993,215 @@ func parseCompareTarget(raw, modelOverride string) (compare.Target, error) {
 		APIKey:  apiKey,
 		Model:   modelOverride, // empty here means "use captured model"
 	}, nil
+}
+
+// --- session subcommands ---
+
+// runSessionStart creates a new Session and prints its id. Until the
+// user runs `session stop` or starts a new session, captured requests
+// can be attached to it via the proxy --session flag.
+//
+//	llm-top session start [--name X] [--label Y] [--tag T] [--sqlite PATH]
+func runSessionStart(rest string) error {
+	fs := flag.NewFlagSet("session-start", flag.ContinueOnError)
+	name := fs.String("name", "", "optional human-readable name")
+	label := fs.String("label", "", "optional one-word label")
+	tagList := fs.String("tag", "", "comma-separated tags (repeatable)")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	mgr := session.NewManager(st)
+	tags := []string{}
+	if *tagList != "" {
+		for _, t := range strings.Split(*tagList, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tags = append(tags, t)
+			}
+		}
+	}
+	sess, err := mgr.Create(session.Session{
+		Name:  *name,
+		Label: *label,
+		Tags:  tags,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("session started: id=%s name=%q label=%q started=%s\n",
+		sess.ID, sess.Name, sess.Label, sess.StartedAt.Format(time.RFC3339))
+	if *name != "" || *label != "" || len(tags) > 0 {
+		fmt.Printf("hint: start the proxy with --session %s (or LLMTOP_SESSION=%s) to attach captured requests\n", sess.ID, sess.ID)
+	}
+	return nil
+}
+
+// runSessionList prints all sessions, newest first.
+//
+//	llm-top session list [--limit N] [--sqlite PATH]
+func runSessionList(rest string) error {
+	fs := flag.NewFlagSet("session-list", flag.ContinueOnError)
+	limit := fs.Int("limit", 50, "max sessions to show")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	mgr := session.NewManager(st)
+	sessions, err := mgr.List()
+	if err != nil {
+		return err
+	}
+	if *limit > 0 && len(sessions) > *limit {
+		sessions = sessions[:*limit]
+	}
+	if len(sessions) == 0 {
+		fmt.Fprintln(os.Stderr, "no sessions in database")
+		return nil
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID	NAME	LABEL	STARTED	ENDED	ACTIVE")
+	for _, s := range sessions {
+		ended := "-"
+		if !s.EndedAt.IsZero() {
+			ended = s.EndedAt.Format("2006-01-02 15:04:05")
+		}
+		active := "no"
+		if s.Active {
+			active = "yes"
+		}
+		fmt.Fprintf(w, "%s	%s	%s	%s	%s	%s\n",
+			s.ID,
+			s.Name,
+			s.Label,
+			s.StartedAt.Format("2006-01-02 15:04:05"),
+			ended,
+			active,
+		)
+	}
+	return w.Flush()
+}
+
+// runSessionShow prints one session's metadata + aggregate stats over
+// its linked requests.
+//
+//	llm-top session show <id|name> [--sqlite PATH]
+func runSessionShow(ref, rest string) error {
+	fs := flag.NewFlagSet("session-show", flag.ContinueOnError)
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	mgr := session.NewManager(st)
+	sess, err := resolveSession(mgr, ref)
+	if err != nil {
+		return err
+	}
+	listFn := func(sessionID string) ([]proxy.Request, error) {
+		return st.List(store.ListFilter{SessionID: sessionID})
+	}
+	agg, err := mgr.Aggregate(sess.ID, listFn)
+	if err != nil {
+		return err
+	}
+	// Fill the Session struct's summary fields for the renderer.
+	sess.RequestCount = agg.Count
+	sess.ErrorCount = agg.ErrorCount
+	sess.TotalCostUSD = agg.TotalCostUSD
+	sess.TotalTokens = agg.TotalInputTokens + agg.TotalOutputTokens
+	session.RenderShow(os.Stdout, sess, agg)
+	return nil
+}
+
+// runSessionDiff prints the side-by-side delta between two sessions.
+//
+//	llm-top session diff <a> <b> [--sqlite PATH]
+func runSessionDiff(a, b, rest string) error {
+	fs := flag.NewFlagSet("session-diff", flag.ContinueOnError)
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	mgr := session.NewManager(st)
+	aSess, err := resolveSession(mgr, a)
+	if err != nil {
+		return fmt.Errorf("a: %w", err)
+	}
+	bSess, err := resolveSession(mgr, b)
+	if err != nil {
+		return fmt.Errorf("b: %w", err)
+	}
+	listFn := func(sessionID string) ([]proxy.Request, error) {
+		return st.List(store.ListFilter{SessionID: sessionID})
+	}
+	aAgg, err := mgr.Aggregate(aSess.ID, listFn)
+	if err != nil {
+		return err
+	}
+	bAgg, err := mgr.Aggregate(bSess.ID, listFn)
+	if err != nil {
+		return err
+	}
+	session.RenderDiff(os.Stdout, aSess, aAgg, bSess, bAgg)
+	return nil
+}
+
+// runSessionStop ends the currently-active session (or the one named
+// via --id). Prints the stopped id and exit time.
+//
+//	llm-top session stop [--id ID] [--sqlite PATH]
+func runSessionStop(rest string) error {
+	fs := flag.NewFlagSet("session-stop", flag.ContinueOnError)
+	id := fs.String("id", "", "session id to stop (default: the currently-active session)")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	mgr := session.NewManager(st)
+	target := *id
+	if target == "" {
+		active, err := mgr.Active()
+		if err != nil {
+			return fmt.Errorf("no --id provided and no active session: %w", err)
+		}
+		target = active.ID
+	}
+	if err := mgr.End(target, time.Now().UTC()); err != nil {
+		return err
+	}
+	fmt.Printf("session stopped: id=%s ended=%s\n", target, time.Now().UTC().Format(time.RFC3339))
+	return nil
+}
+
+// resolveSession looks up a session by 16-hex id first, then by
+// case-sensitive name. Returns ErrNotFound when neither resolves.
+func resolveSession(mgr *session.Manager, ref string) (session.Session, error) {
+	if s, err := mgr.Get(ref); err == nil {
+		return s, nil
+	}
+	return mgr.FindByName(ref)
 }

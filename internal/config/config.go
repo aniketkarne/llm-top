@@ -36,6 +36,7 @@ type Config struct {
 	UI              bool   `json:"ui"`
 	SQLitePath      string `json:"sqlite_path"`
 	Mode            string `json:"mode"` // "proxy", "ui", or "integrated"
+	SessionID       string `json:"session_id"`
 }
 
 // Default returns a Config populated with sensible defaults.
@@ -93,6 +94,7 @@ func Load(args []string, filePath string) (Config, error) {
 	ui := fs.Bool("ui", cfg.UI, "launch TUI alongside the proxy")
 	sqlitePath := fs.String("sqlite", cfg.SQLitePath, "optional SQLite path for session dump")
 	mode := fs.String("mode", cfg.Mode, "run mode: proxy | ui | integrated")
+	sessionID := fs.String("session", cfg.SessionID, "session id to attach captured requests to")
 	configPath := fs.String("config", filePath, "path to config file (JSON)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
@@ -104,6 +106,7 @@ func Load(args []string, filePath string) (Config, error) {
 	cfg.UI = *ui
 	cfg.SQLitePath = *sqlitePath
 	cfg.Mode = *mode
+	cfg.SessionID = *sessionID
 
 	// Allow --config to point at a file that should be loaded last (overrides env, etc).
 	if cp := *configPath; cp != "" && cp != filePath {
@@ -209,5 +212,8 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LLMTOP_MODE"); v != "" {
 		cfg.Mode = v
+	}
+	if v := os.Getenv("LLMTOP_SESSION"); v != "" {
+		cfg.SessionID = v
 	}
 }
