@@ -33,15 +33,27 @@ type RequestInserter interface {
 	Insert(r Request) error
 }
 
+// PostPersistHook is invoked after every successful persist (i.e.
+// after the Request has been written to the store). The hook is
+// passed the Request that was just persisted. Used by main.go to
+// wire the anomaly detector into the proxy hot path without
+// coupling the proxy package to the anomaly package.
+//
+// The hook is intentionally `func(Request)` rather than an interface
+// so this package stays out of the anomaly import graph entirely.
+// Anomaly types flow through the wire as opaque values when needed.
+type PostPersistHook func(Request)
+
 // Server is the proxy HTTP server with attached state.
 type Server struct {
-	cfg      Config
-	recorder *metrics.Recorder
-	ring     *ring.Buffer
-	red      *redactor.Redactor
-	client   *http.Client
-	prices   pricing.Table
-	store    RequestInserter
+	cfg          Config
+	recorder     *metrics.Recorder
+	ring         *ring.Buffer
+	red          *redactor.Redactor
+	client       *http.Client
+	prices       pricing.Table
+	store        RequestInserter
+	postPersist  PostPersistHook
 
 	totalRequests atomic.Uint64
 	totalErrors   atomic.Uint64
@@ -88,6 +100,17 @@ func New(cfg Config, rec *metrics.Recorder, ring *ring.Buffer, red *redactor.Red
 // WithStore attaches a RequestStore. Returns the receiver for chaining.
 func (s *Server) WithStore(st RequestInserter) *Server {
 	s.store = st
+	return s
+}
+
+// WithPostPersistHook registers a callback that fires after every
+// successful store Insert. Returns the receiver for chaining.
+//
+// Typical use: main.go wires a hook that runs the anomaly detector
+// and persists any anomalies it detects, keeping the proxy package
+// decoupled from internal/anomaly.
+func (s *Server) WithPostPersistHook(h PostPersistHook) *Server {
+	s.postPersist = h
 	return s
 }
 
@@ -392,7 +415,16 @@ func (s *Server) persist(rec Request) {
 	if s.store == nil {
 		return
 	}
-	_ = s.store.Insert(rec)
+	if err := s.store.Insert(rec); err != nil {
+		return
+	}
+	if s.postPersist != nil {
+		// Hook is fire-and-forget by contract; callers must not
+		// panic or block. main.go wires a hook that runs the
+		// anomaly detector, which is bounded and safe.
+		defer func() { _ = recover() }()
+		s.postPersist(rec)
+	}
 }
 
 // isStreamingResponse returns true if the upstream response is an SSE stream.

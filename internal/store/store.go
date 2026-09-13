@@ -49,6 +49,16 @@ type ListFilter struct {
 	Limit     int
 }
 
+// AnomalyFilter narrows ListAnomalies. Mirrors the sqlite build so
+// the CLI works on both. Using time.Time for Since/Until; if
+// callers want to filter by relative time they compute it first.
+type AnomalyFilter struct {
+	Kind  string
+	Since time.Time
+	Until time.Time
+	Limit int
+}
+
 // Open returns ErrUnavailable because SQLite is not compiled in.
 func Open(path string) (*Store, error) {
 	return nil, ErrUnavailable
@@ -89,3 +99,9 @@ func (s *Store) ListSessions() ([]Session, error) { return nil, ErrUnavailable }
 
 // ActiveSession is unavailable without the sqlite tag.
 func (s *Store) ActiveSession() (Session, error) { return Session{}, ErrUnavailable }
+
+// InsertAnomaly is unavailable without the sqlite tag.
+func (s *Store) InsertAnomaly(a interface{}) error { return ErrUnavailable }
+
+// ListAnomalies is unavailable without the sqlite tag.
+func (s *Store) ListAnomalies(f AnomalyFilter) ([]interface{}, error) { return nil, ErrUnavailable }

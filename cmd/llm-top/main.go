@@ -28,6 +28,7 @@ import (
 	"time"
 
 	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
+	"github.com/aniketkarne-com/llm-top/internal/anomaly"
 	"github.com/aniketkarne-com/llm-top/internal/compare"
 	"github.com/aniketkarne-com/llm-top/internal/config"
 	"github.com/aniketkarne-com/llm-top/internal/demo"
@@ -152,6 +153,8 @@ func run(args []string) error {
 			default:
 				return fmt.Errorf("unknown session subcommand %q (try start|list|show|diff|stop)", rest[0])
 			}
+		case "anomalies":
+			return runAnomalies(strings.Join(filtered[1:], " "))
 		}
 	}
 
@@ -215,6 +218,18 @@ func run(args []string) error {
 		}, rec, buf, red)
 		if st != nil {
 			srv.WithStore(st)
+			// Wire the anomaly detector into the proxy hot path. Every
+			// successfully-persisted Request goes through the detector;
+			// any anomalies it triggers are written back to the same
+			// SQLite store via InsertAnomaly. The detector owns its
+			// rolling baselines in memory and shares nothing with the
+			// proxy beyond the per-Request callback.
+			det := anomaly.New()
+			srv.WithPostPersistHook(func(r proxy.Request) {
+				for _, a := range det.Evaluate(r) {
+					_ = st.InsertAnomaly(a)
+				}
+			})
 		}
 		statsProv = srv
 		go func() {
@@ -1204,4 +1219,64 @@ func resolveSession(mgr *session.Manager, ref string) (session.Session, error) {
 		return s, nil
 	}
 	return mgr.FindByName(ref)
+}
+
+// runAnomalies prints recent anomalies from the persistent store.
+// Detectors run in the proxy hot path; this CLI just reads what was
+// already written.
+//
+//	llm-top anomalies [--since DUR] [--kind X] [--limit N] [--json] [--sqlite PATH]
+func runAnomalies(rest string) error {
+	fs := flag.NewFlagSet("anomalies", flag.ContinueOnError)
+	since := fs.Duration("since", 0, "only show anomalies newer than this (e.g. 1h, 30m)")
+	kind := fs.String("kind", "", "filter by anomaly kind (e.g. ttft_spike, error_burst)")
+	limit := fs.Int("limit", 50, "max anomalies to show")
+	asJSON := fs.Bool("json", false, "emit JSON instead of the human-readable table")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	filter := store.AnomalyFilter{
+		Kind:  *kind,
+		Limit: *limit,
+	}
+	if *since > 0 {
+		filter.Since = time.Now().Add(-*since).UTC()
+	}
+	rows, err := st.ListAnomalies(filter)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(rows)
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(os.Stderr, "no anomalies matched the filter")
+		return nil
+	}
+	// Coerce []whatever to []anomaly.Anomaly so the renderer is the
+	// same regardless of which build (sqlite vs no-sqlite) the
+	// binary was compiled from. Both branches of the switch below
+	// produce the same []anomaly.Anomaly value.
+	var as []anomaly.Anomaly
+	switch r := any(rows).(type) {
+	case []anomaly.Anomaly:
+		as = r
+	case []interface{}:
+		for _, item := range r {
+			if a, ok := item.(anomaly.Anomaly); ok {
+				as = append(as, a)
+			}
+		}
+	}
+	anomaly.RenderText(os.Stdout, as)
+	return nil
 }

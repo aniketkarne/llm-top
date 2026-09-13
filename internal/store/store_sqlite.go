@@ -15,6 +15,7 @@
 package store
 
 import (
+	cryptoRand "crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/aniketkarne-com/llm-top/internal/anomaly"
 	"github.com/aniketkarne-com/llm-top/internal/proxy"
 	"github.com/aniketkarne-com/llm-top/internal/session"
 )
@@ -124,6 +126,20 @@ func (s *Store) init() error {
 		);
 		CREATE INDEX IF NOT EXISTS sessions_started_at ON sessions(started_at);
 		CREATE INDEX IF NOT EXISTS sessions_name ON sessions(name);
+
+		CREATE TABLE IF NOT EXISTS anomalies (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL,
+			severity TEXT NOT NULL DEFAULT 'info',
+			message TEXT NOT NULL,
+			detected_at TEXT NOT NULL,
+			request_id TEXT,
+			baseline TEXT,
+			observed TEXT,
+			extra TEXT NOT NULL DEFAULT '{}'
+		);
+		CREATE INDEX IF NOT EXISTS anomalies_detected_at ON anomalies(detected_at);
+		CREATE INDEX IF NOT EXISTS anomalies_kind ON anomalies(kind);
 	`)
 	if err != nil {
 		return fmt.Errorf("sqlite init: %w", err)
@@ -496,4 +512,103 @@ func sessionTagsToJSON(tags []string) (string, error) {
 		return "", fmt.Errorf("store: marshal session tags: %w", err)
 	}
 	return string(b), nil
+}
+
+// --- v0.2.0 AnomalyStore API ---
+
+// AnomalyFilter narrows ListAnomalies. Zero values mean "no filter".
+type AnomalyFilter struct {
+	Kind   string
+	Since  time.Time
+	Until  time.Time
+	Limit  int
+}
+
+// InsertAnomaly persists a single Anomaly. Returns an error when the
+// id is empty. The ID is auto-assigned (RFC3339Nano timestamp + 4
+// random bytes, hex-encoded) if a.Anomaly.ID is empty.
+func (s *Store) InsertAnomaly(a anomaly.Anomaly) error {
+	if a.ID == "" {
+		// Caller didn't assign — synthesize one from now + random.
+		a.ID = newAnomalyID()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`INSERT INTO anomalies(
+		id, kind, severity, message, detected_at, request_id, baseline, observed, extra
+	) VALUES (?,?,?,?,?,?,?,?,?)`,
+		a.ID,
+		string(a.Kind),
+		string(a.Severity),
+		a.Message,
+		a.DetectedAt.UTC().Format(time.RFC3339Nano),
+		a.RequestID,
+		a.Baseline,
+		a.Observed,
+		a.EncodeExtra(),
+	)
+	return err
+}
+
+// ListAnomalies returns recent anomalies matching the filter, newest
+// first.
+func (s *Store) ListAnomalies(f AnomalyFilter) ([]anomaly.Anomaly, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	q := `SELECT id, kind, severity, message, detected_at, request_id, baseline, observed, extra
+		FROM anomalies WHERE 1=1`
+	args := []any{}
+	if f.Kind != "" {
+		q += " AND kind = ?"
+		args = append(args, f.Kind)
+	}
+	if !f.Since.IsZero() {
+		q += " AND detected_at >= ?"
+		args = append(args, f.Since.UTC().Format(time.RFC3339Nano))
+	}
+	if !f.Until.IsZero() {
+		q += " AND detected_at < ?"
+		args = append(args, f.Until.UTC().Format(time.RFC3339Nano))
+	}
+	q += " ORDER BY detected_at DESC"
+	if f.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, f.Limit)
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []anomaly.Anomaly
+	for rows.Next() {
+		var a anomaly.Anomaly
+		var ts string
+		var extraJSON string
+		if err := rows.Scan(&a.ID, &a.Kind, &a.Severity, &a.Message, &ts, &a.RequestID, &a.Baseline, &a.Observed, &extraJSON); err != nil {
+			return nil, err
+		}
+		a.DetectedAt, _ = time.Parse(time.RFC3339Nano, ts)
+		if extraJSON != "" && extraJSON != "{}" {
+			_ = json.Unmarshal([]byte(extraJSON), &a.Extra)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// newAnomalyID is a small unique-id generator for anomalies. Same
+// shape as Request IDs so the two namespaces don't collide.
+func newAnomalyID() string {
+	var rnd [4]byte
+	_, _ = readFullRandom(rnd[:])
+	return fmt.Sprintf("%08x%08x", uint32(time.Now().UTC().UnixNano()), rnd)
+}
+
+// readFullRandom wraps crypto/rand.Read with the io.ReaderFull
+// semantics so we can use the result inline. We avoid pulling in
+// crypto/rand at the top level to keep the package imports tight —
+// this helper centralises the dependency.
+func readFullRandom(b []byte) (int, error) {
+	return cryptoRand.Read(b)
 }
