@@ -261,6 +261,18 @@ func run(args []string) error {
 			statsProv = nullStats{}
 		}
 		model := ui.New(rec, buf, statsProv, cfg.ListenAddr, cfg.UpstreamBaseURL)
+		// Wire anomaly + session sources into the TUI when SQLite is
+		// enabled. The anomaly source scrapes the proxy's own
+		// /metrics endpoint; the session source reads from the same
+		// DB. Both are no-ops when st is nil (no sqlite configured).
+		if st != nil {
+			metricsURL := "http://" + cfg.ListenAddr + "/metrics"
+			model.WithAnomalySource(ui.NewHTTPAnomalySource(metricsURL, nil))
+			// Session source is a thin adapter over *store.Store
+			// so the TUI can show the active session name and a
+			// picker overlay.
+			model.WithSessionSource(newStoreSessionSource(st), cfg.SessionID)
+		}
 		isTTY := isTerminal(os.Stdout)
 		go func() {
 			err := model.Run(os.Stdout, 500*time.Millisecond, isTTY)
@@ -1295,4 +1307,34 @@ func runAnomalies(rest string) error {
 	}
 	anomaly.RenderText(os.Stdout, as)
 	return nil
+}
+
+// storeSessionSource adapts *store.Store to ui.SessionSource so the
+// TUI can list recent sessions and display the active one without
+// pulling internal/session into the ui package's import graph.
+type storeSessionSource struct {
+	st *store.Store
+}
+
+func newStoreSessionSource(st *store.Store) *storeSessionSource {
+	return &storeSessionSource{st: st}
+}
+
+func (s *storeSessionSource) List() []ui.SessionInfo {
+	mgr := session.NewManager(s.st)
+	sessions, err := mgr.List()
+	if err != nil || len(sessions) == 0 {
+		return nil
+	}
+	out := make([]ui.SessionInfo, 0, len(sessions))
+	for _, sess := range sessions {
+		out = append(out, ui.SessionInfo{
+			ID:        sess.ID,
+			Name:      sess.Name,
+			Label:     sess.Label,
+			StartedAt: sess.StartedAt,
+			EndedAt:   sess.EndedAt,
+		})
+	}
+	return out
 }
