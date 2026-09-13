@@ -14,7 +14,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
@@ -63,6 +66,20 @@ func run(args []string) error {
 			return nil
 		case "demo":
 			return runDemo()
+		case "requests":
+			return runRequests(filtered[1:])
+		case "show":
+			rest := filtered[1:]
+			if len(rest) < 1 || strings.HasPrefix(rest[0], "-") {
+				return fmt.Errorf("usage: llm-top show <request-id> [--sqlite <path>]")
+			}
+			return runShow(rest[0], strings.Join(rest[1:], " "))
+		case "diff":
+			rest := filtered[1:]
+			if len(rest) < 2 || strings.HasPrefix(rest[0], "-") || strings.HasPrefix(rest[1], "-") {
+				return fmt.Errorf("usage: llm-top diff <id-a> <id-b> [--sqlite <path>]")
+			}
+			return runDiff(rest[0], rest[1], strings.Join(rest[2:], " "))
 		}
 	}
 
@@ -123,6 +140,9 @@ func run(args []string) error {
 			UpstreamAPIKey:  cfg.UpstreamAPIKey,
 			BufferSize:      cfg.BufferSize,
 		}, rec, buf, red)
+		if st != nil {
+			srv.WithStore(st)
+		}
 		statsProv = srv
 		go func() {
 			if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -212,6 +232,221 @@ func runDemo() error {
 		res.Requests, res.OutputTokens, res.BufferEntries, res.Duration.Round(time.Millisecond),
 	)
 	return nil
+}
+
+// sqliteDBPath returns the SQLite database path from --sqlite, or the default.
+// Used by the read-only CLI subcommands (requests/show/diff) that need to
+// open the DB without going through the full config loader.
+func defaultSQLitePath() string {
+	if v := os.Getenv("LLMTOP_SQLITE"); v != "" {
+		return v
+	}
+	return "llm-top.db"
+}
+
+// openCLIStore opens the store at the path given by --sqlite (or default)
+// and registers cleanup so the file handle is released.
+func openCLIStore(flag string) (*store.Store, func(), error) {
+	path := flag
+	if path == "" {
+		path = defaultSQLitePath()
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil, nil, fmt.Errorf("no sqlite db at %s (set --sqlite <path> or LLMTOP_SQLITE; run llm-top with --sqlite to create one)", path)
+	}
+	st, err := store.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return st, func() { _ = st.Close() }, nil
+}
+
+// runRequests lists recent captured requests. Flags:
+//
+//	--limit N    maximum rows (default 50)
+//	--model X    filter by model
+//	--since DUR  show only requests newer than DUR (e.g. 1h, 30m, 2h30m)
+//	--json       emit JSON instead of a table
+func runRequests(args []string) error {
+	fs := flag.NewFlagSet("requests", flag.ContinueOnError)
+	limit := fs.Int("limit", 50, "max rows to show")
+	model := fs.String("model", "", "filter by model name")
+	since := fs.Duration("since", 0, "only show requests newer than this (e.g. 1h, 30m)")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	filter := store.ListFilter{
+		Model: *model,
+		Limit: *limit,
+	}
+	if *since > 0 {
+		filter.Since = time.Now().Add(-*since).UTC()
+	}
+	rows, err := st.List(filter)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(rows)
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(os.Stderr, "no requests matched the filter")
+		return nil
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tSTARTED\tMODEL\tPROVIDER\tSTATUS\tTTFT\tTOTAL\tIN\tOUT\tCOST\tERR")
+	for _, r := range rows {
+		ttft := "-"
+		if r.TTFTMillis > 0 {
+			ttft = fmt.Sprintf("%dms", r.TTFTMillis)
+		}
+		cost := "$?"
+		if r.CostUSD > 0 {
+			cost = fmt.Sprintf("$%.4f", r.CostUSD)
+		}
+		errStr := "-"
+		if r.Error != "" {
+			errStr = truncate(r.Error, 40)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%dms\t%d\t%d\t%s\t%s\n",
+			r.ID,
+			r.StartedAt.Format("2006-01-02 15:04:05"),
+			r.Model,
+			r.Provider,
+			r.StatusCode,
+			ttft,
+			r.TotalMillis,
+			r.PromptTokens,
+			r.OutputTokens,
+			cost,
+			errStr,
+		)
+	}
+	return w.Flush()
+}
+
+// runShow prints full detail for a single captured request as pretty JSON.
+//
+//	llm-top show <id> [--sqlite <path>]
+func runShow(id, rest string) error {
+	fs := flag.NewFlagSet("show", flag.ContinueOnError)
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	r, err := st.Get(id)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(r)
+}
+
+// runDiff renders a unified diff between two captured requests' bodies.
+//
+//	llm-top diff <idA> <idB> [--sqlite <path>]
+func runDiff(idA, idB, rest string) error {
+	fs := flag.NewFlagSet("diff", flag.ContinueOnError)
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	a, err := st.Get(idA)
+	if err != nil {
+		return fmt.Errorf("a: %w", err)
+	}
+	b, err := st.Get(idB)
+	if err != nil {
+		return fmt.Errorf("b: %w", err)
+	}
+	fmt.Printf("--- request %s\n+++ request %s\n", a.ID, b.ID)
+	printUnified(a.RequestBody, b.RequestBody, "request_body")
+	fmt.Printf("\n--- response %s\n+++ response %s\n", a.ID, b.ID)
+	printUnified(a.ResponseBody, b.ResponseBody, "response_body")
+	return nil
+}
+
+func printUnified(a, b, label string) {
+	for _, l := range diffLines(a, b, label) {
+		fmt.Println(l)
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
+}
+
+func diffLines(a, b, label string) []string {
+	as := strings.Split(a, "\n")
+	bs := strings.Split(b, "\n")
+	out := []string{fmt.Sprintf("@@ %s @@", label)}
+	n, m := len(as), len(bs)
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+	}
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			if as[i-1] == bs[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else if dp[i-1][j] >= dp[i][j-1] {
+				dp[i][j] = dp[i-1][j]
+			} else {
+				dp[i][j] = dp[i][j-1]
+			}
+		}
+	}
+	type op struct {
+		tag byte
+		txt string
+	}
+	ops := []op{}
+	i, j := n, m
+	for i > 0 || j > 0 {
+		switch {
+		case i > 0 && j > 0 && as[i-1] == bs[j-1]:
+			ops = append(ops, op{' ', as[i-1]})
+			i--
+			j--
+		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
+			ops = append(ops, op{'+', bs[j-1]})
+			j--
+		default:
+			ops = append(ops, op{'-', as[i-1]})
+			i--
+		}
+	}
+	for x, y := 0, len(ops)-1; x < y; x, y = x+1, y-1 {
+		ops[x], ops[y] = ops[y], ops[x]
+	}
+	for _, o := range ops {
+		out = append(out, fmt.Sprintf("%c %s", o.tag, o.txt))
+	}
+	return out
 }
 
 func printUsage(w io.Writer) {

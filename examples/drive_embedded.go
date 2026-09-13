@@ -72,7 +72,7 @@ func main() {
 
 	// Fire three requests.
 	for i := 0; i < 3; i++ {
-		body := fmt.Sprintf(`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello #%d"}]}`, i+1)
+		body := fmt.Sprintf(`{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hello #%d"}]}`, i+1)
 		resp, err := http.Post("http://127.0.0.1:8081/v1/chat/completions",
 			"application/json", bytes.NewReader([]byte(body)))
 		if err != nil {

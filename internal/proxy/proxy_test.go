@@ -276,3 +276,161 @@ func TestCheckAvailable(t *testing.T) {
 		t.Fatalf("want ErrPortInUse, got %v", err)
 	}
 }
+
+// stubStore is a RequestInserter that captures every Request sent to it.
+type stubStore struct {
+	mu      sync.Mutex
+	records []Request
+}
+
+func (s *stubStore) Insert(r Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records, r)
+	return nil
+}
+
+func (s *stubStore) Snapshot() []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Request, len(s.records))
+	copy(out, s.records)
+	return out
+}
+
+func TestEmitsXRequestIDHeader(t *testing.T) {
+	upstream := startFakeUpstream(t)
+	defer upstream.Close()
+	proxy, _, _ := newTestServer(t, upstream.URL, "sk-test")
+	defer proxy.Close()
+
+	body := bytes.NewBufferString(`{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hi"}]}`)
+	resp, err := http.Post(proxy.URL+"/v1/chat/completions", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	id := resp.Header.Get("X-Request-Id")
+	if len(id) != 16 {
+		t.Fatalf("X-Request-Id: want 16 hex chars, got %q (len %d)", id, len(id))
+	}
+}
+
+func TestHonorsClientXRequestID(t *testing.T) {
+	upstream := startFakeUpstream(t)
+	defer upstream.Close()
+	proxy, _, _ := newTestServer(t, upstream.URL, "sk-test")
+	defer proxy.Close()
+
+	req, _ := http.NewRequest("POST", proxy.URL+"/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("X-Request-Id", "client-supplied-id")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("X-Request-Id"); got != "client-supplied-id" {
+		t.Fatalf("X-Request-Id: want client-supplied-id, got %q", got)
+	}
+}
+
+func TestPersistsStructuredRequest(t *testing.T) {
+	upstream := startFakeUpstream(t)
+	defer upstream.Close()
+	rec := metrics.NewRecorder()
+	rb := ring.New(500)
+	red := redactor.New()
+	srv := New(Config{UpstreamBaseURL: upstream.URL, UpstreamAPIKey: "sk-test", BufferSize: 500}, rec, rb, red)
+	st := &stubStore{}
+	srv.WithStore(st)
+	proxy := httptest.NewServer(srv.Handler())
+	defer proxy.Close()
+
+	// Non-streaming.
+	body := bytes.NewBufferString(`{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hi"}]}`)
+	resp, err := http.Post(proxy.URL+"/v1/chat/completions", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	// Streaming.
+	body = bytes.NewBufferString(`{"model":"claude-sonnet-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	resp, err = http.Post(proxy.URL+"/v1/chat/completions", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	// Upstream error.
+	body = bytes.NewBufferString(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`)
+	srv2 := New(Config{UpstreamBaseURL: "http://127.0.0.1:1", BufferSize: 500}, rec, rb, red)
+	st2 := &stubStore{}
+	srv2.WithStore(st2)
+	proxy2 := httptest.NewServer(srv2.Handler())
+	defer proxy2.Close()
+	resp, err = http.Post(proxy2.URL+"/v1/chat/completions", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	records := st.Snapshot()
+	if len(records) != 2 {
+		t.Fatalf("stub-store: want 2 records, got %d", len(records))
+	}
+	for _, r := range records {
+		if r.ID == "" || len(r.ID) != 16 {
+			t.Errorf("bad id: %q", r.ID)
+		}
+		if r.StartedAt.IsZero() {
+			t.Errorf("zero started_at: %+v", r)
+		}
+		if r.StatusCode != 200 {
+			t.Errorf("bad status: %d", r.StatusCode)
+		}
+		if r.Model == "" {
+			t.Errorf("missing model: %+v", r)
+		}
+		if r.Provider != "local" {
+			t.Errorf("provider should be 'local' for 127.0.0.1 upstream, got %q", r.Provider)
+		}
+		if strings.Contains(r.RequestBody, "sk-test") {
+			t.Errorf("api key leaked into RequestBody: %q", r.RequestBody)
+		}
+	}
+	// Stream flag should be set on exactly one.
+	gotStreams := 0
+	for _, r := range records {
+		if r.Stream {
+			gotStreams++
+		}
+	}
+	if gotStreams != 1 {
+		t.Errorf("want 1 streaming record, got %d", gotStreams)
+	}
+
+	// Cost should be computed for both models.
+	if records[0].CostUSD == 0 {
+		t.Errorf("cost not computed for gpt-5.5-mini: %+v", records[0])
+	}
+	if records[1].CostUSD == 0 {
+		t.Errorf("cost not computed for claude-sonnet-5: %+v", records[1])
+	}
+
+	// Error path also persists.
+	errRecords := st2.Snapshot()
+	if len(errRecords) != 1 {
+		t.Fatalf("error stub-store: want 1, got %d", len(errRecords))
+	}
+	if errRecords[0].StatusCode != http.StatusBadGateway {
+		t.Errorf("error status: want 502, got %d", errRecords[0].StatusCode)
+	}
+	if errRecords[0].Error == "" {
+		t.Errorf("error message missing: %+v", errRecords[0])
+	}
+}
