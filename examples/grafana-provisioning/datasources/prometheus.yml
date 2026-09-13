@@ -1,0 +1,16 @@
+# Grafana provisioning for llm-top dashboards.
+#
+# Two halves: the datasource points at the Prometheus container
+# defined in docker-compose.yml, and the dashboard provider pulls
+# every JSON file under /var/lib/grafana/dashboards (which the
+# docker-compose mounts from ./grafana-dashboards on the host).
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

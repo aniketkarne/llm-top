@@ -46,14 +46,15 @@ type PostPersistHook func(Request)
 
 // Server is the proxy HTTP server with attached state.
 type Server struct {
-	cfg          Config
-	recorder     *metrics.Recorder
-	ring         *ring.Buffer
-	red          *redactor.Redactor
-	client       *http.Client
-	prices       pricing.Table
-	store        RequestInserter
-	postPersist  PostPersistHook
+	cfg            Config
+	recorder       *metrics.Recorder
+	ring           *ring.Buffer
+	red            *redactor.Redactor
+	client         *http.Client
+	prices         pricing.Table
+	store          RequestInserter
+	postPersist    PostPersistHook
+	metricsHandler http.Handler // optional; mounted at /metrics when set
 
 	totalRequests atomic.Uint64
 	totalErrors   atomic.Uint64
@@ -114,11 +115,23 @@ func (s *Server) WithPostPersistHook(h PostPersistHook) *Server {
 	return s
 }
 
+// WithMetricsHandler attaches an http.Handler that will be served
+// at GET /metrics. Typical use is prom.Handler(rec, src); main.go
+// owns the wiring so the proxy package doesn't import internal/prom.
+// Pass nil to disable the metrics endpoint.
+func (s *Server) WithMetricsHandler(h http.Handler) *Server {
+	s.metricsHandler = h
+	return s
+}
+
 // Handler returns the http.Handler that serves proxy traffic.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/", s.handleProxy)
 	mux.HandleFunc("/", s.handleRoot)
+	if s.metricsHandler != nil {
+		mux.Handle("/metrics", s.metricsHandler)
+	}
 	return mux
 }
 
@@ -343,6 +356,7 @@ func (s *Server) handleStream(w http.ResponseWriter, resp *http.Response, r *htt
 		PromptTok: inTok,
 		OutputTok: rec.OutputTokens,
 		Model:     rec.Model,
+		Provider:  rec.Provider,
 		Status:    resp.StatusCode,
 		Path:      r.URL.Path,
 		Stream:    true,
@@ -381,6 +395,7 @@ func (s *Server) handleJSON(w http.ResponseWriter, resp *http.Response, r *http.
 		PromptTok: inTok,
 		OutputTok: outTok,
 		Model:     rec.Model,
+		Provider:  rec.Provider,
 		Status:    resp.StatusCode,
 		Path:      r.URL.Path,
 		Stream:    false,
@@ -401,6 +416,7 @@ func (s *Server) recordError(rec *Request, r *http.Request, status int, inTok in
 		Total:     rec.EndedAt.Sub(rec.StartedAt),
 		PromptTok: inTok,
 		Model:     rec.Model,
+		Provider:  rec.Provider,
 		Status:    status,
 		Path:      r.URL.Path,
 		Err:       msg,

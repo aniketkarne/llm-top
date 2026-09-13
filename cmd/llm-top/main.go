@@ -34,6 +34,7 @@ import (
 	"github.com/aniketkarne-com/llm-top/internal/demo"
 	"github.com/aniketkarne-com/llm-top/internal/metrics"
 	"github.com/aniketkarne-com/llm-top/internal/pricing"
+	"github.com/aniketkarne-com/llm-top/internal/prom"
 	"github.com/aniketkarne-com/llm-top/internal/proxy"
 	"github.com/aniketkarne-com/llm-top/internal/redactor"
 	"github.com/aniketkarne-com/llm-top/internal/replay"
@@ -225,11 +226,26 @@ func run(args []string) error {
 			// rolling baselines in memory and shares nothing with the
 			// proxy beyond the per-Request callback.
 			det := anomaly.New()
+			anomalyCh := make(chan anomaly.Anomaly, 256)
 			srv.WithPostPersistHook(func(r proxy.Request) {
 				for _, a := range det.Evaluate(r) {
 					_ = st.InsertAnomaly(a)
+					// Also push to the metrics channel so /metrics
+					// can expose llm_anomalies_total. Non-blocking
+					// send; if the channel buffer fills up we drop
+					// the metric (anomaly is already persisted to
+					// the store so no data loss).
+					select {
+					case anomalyCh <- a:
+					default:
+					}
 				}
 			})
+			// Wire the Prometheus /metrics endpoint. Stdlib-only exporter
+			// in internal/prom so this stays dep-free by default.
+			srv.WithMetricsHandler(prom.Handler(rec, prom.ChanSource(anomalyCh)))
+			// Drain anomalyCh on shutdown so the source can exit cleanly.
+			defer func() { close(anomalyCh) }()
 		}
 		statsProv = srv
 		go func() {
