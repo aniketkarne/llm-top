@@ -33,6 +33,7 @@ import (
 	"github.com/aniketkarne-com/llm-top/internal/metrics"
 	"github.com/aniketkarne-com/llm-top/internal/proxy"
 	"github.com/aniketkarne-com/llm-top/internal/redactor"
+	"github.com/aniketkarne-com/llm-top/internal/replay"
 	"github.com/aniketkarne-com/llm-top/internal/store"
 	"github.com/aniketkarne-com/llm-top/internal/ui"
 )
@@ -46,6 +47,12 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// replayExitCode carries the desired process exit code out of
+// runReplay for the main wrapper to honor. We use a package-level
+// variable rather than a second return value because run()'s
+// signature is fixed at (args []string) error.
+var replayExitCode int
 
 func run(args []string) error {
 	// Default to "integrated" mode when no subcommand is given. If the user
@@ -77,9 +84,35 @@ func run(args []string) error {
 		case "diff":
 			rest := filtered[1:]
 			if len(rest) < 2 || strings.HasPrefix(rest[0], "-") || strings.HasPrefix(rest[1], "-") {
-				return fmt.Errorf("usage: llm-top diff <id-a> <id-b> [--sqlite <path>]")
+				return fmt.Errorf("usage: llm-top diff <id-a> <id-b> [--metrics] [--sqlite <path>]")
 			}
 			return runDiff(rest[0], rest[1], strings.Join(rest[2:], " "))
+		case "replay":
+			rest := filtered[1:]
+			if len(rest) < 1 || strings.HasPrefix(rest[0], "-") {
+				return fmt.Errorf("usage: llm-top replay <request-id> [--model X] [--upstream URL] [--api-key KEY] [--local] [--no-stream] [--timeout 30s] [--headers k=v,...] [--sqlite <path>]")
+			}
+			err := runReplay(rest[0], strings.Join(rest[1:], " "))
+			if replayExitCode != 0 {
+				os.Exit(replayExitCode)
+			}
+			return err
+		case "curl":
+			rest := filtered[1:]
+			if len(rest) < 1 || strings.HasPrefix(rest[0], "-") {
+				return fmt.Errorf("usage: llm-top curl <request-id> [--reveal-key] [--upstream URL] [--api-key KEY] [--sqlite <path>]")
+			}
+			return runCurl(rest[0], strings.Join(rest[1:], " "))
+		case "edit":
+			rest := filtered[1:]
+			if len(rest) < 1 || strings.HasPrefix(rest[0], "-") {
+				return fmt.Errorf("usage: llm-top edit <request-id> [--upstream URL] [--api-key KEY] [--local] [--timeout 30s] [--sqlite <path>]")
+			}
+			err := runEdit(rest[0], strings.Join(rest[1:], " "))
+			if replayExitCode != 0 {
+				os.Exit(replayExitCode)
+			}
+			return err
 		}
 	}
 
@@ -358,12 +391,241 @@ func runShow(id, rest string) error {
 	return enc.Encode(r)
 }
 
-// runDiff renders a unified diff between two captured requests' bodies.
+// runReplay re-fires a captured request against a configured upstream
+// (or the captured upstream by default) and prints a one-line summary
+// followed by the response body. Exit codes:
 //
-//	llm-top diff <idA> <idB> [--sqlite <path>]
+//	0  request succeeded (2xx)
+//	1  transport error or non-2xx status
+//	2  missing/invalid arguments or missing sqlite store
+func runReplay(id, rest string) error {
+	replayExitCode = 0
+	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
+	model := fs.String("model", "", "override the model field in the request body")
+	upstream := fs.String("upstream", "", "override the upstream base URL")
+	apiKey := fs.String("api-key", "", "override the upstream API key")
+	local := fs.Bool("local", false, "use http://localhost:11434/v1 (Ollama) as the upstream with no auth")
+	noStream := fs.Bool("no-stream", false, "force the request to non-streaming")
+	timeout := fs.Duration("timeout", 30*time.Second, "request timeout")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	headersRaw := fs.String("headers", "", "comma-separated extra headers (k=v,k=v)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	captured, err := st.Get(id)
+	if err != nil {
+		return err
+	}
+
+	cfg := replay.ExecutionConfig{
+		Model: *model,
+	}
+	if *local {
+		cfg.UpstreamBaseURL = "http://localhost:11434/v1"
+		cfg.UpstreamAPIKey = ""
+	} else {
+		cfg.UpstreamBaseURL = *upstream
+		if cfg.UpstreamBaseURL == "" {
+			cfg.UpstreamBaseURL = captured.Upstream
+		}
+		cfg.UpstreamAPIKey = *apiKey
+		if cfg.UpstreamAPIKey == "" {
+			cfg.UpstreamAPIKey = os.Getenv("LLMTOP_API_KEY")
+		}
+		if cfg.UpstreamAPIKey == "" {
+			cfg.UpstreamAPIKey = os.Getenv("OPENAI_API_KEY")
+		}
+	}
+	cfg.Timeout = *timeout
+	if *noStream {
+		f := false
+		cfg.Stream = &f
+	}
+	if *headersRaw != "" {
+		cfg.Headers = parseHeaderList(*headersRaw)
+	}
+
+	res := replay.Execute(context.Background(), captured, cfg)
+	fmt.Println(replay.Summary(res))
+	body := replay.TruncateBody(res.ResponseBody, 4096)
+	if body != "" {
+		fmt.Println()
+		fmt.Println(body)
+	}
+	if res.Error != "" {
+		replayExitCode = 1
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		replayExitCode = 1
+	}
+	return nil
+}
+
+// runCurl renders a ready-to-paste curl invocation for a captured
+// request. By default the Authorization header contains the literal
+// $LLMTOP_API_KEY so the user can paste-and-run without leaking.
+//
+//	llm-top curl <id> [--reveal-key] [--upstream URL] [--api-key KEY] [--sqlite <path>]
+func runCurl(id, rest string) error {
+	fs := flag.NewFlagSet("curl", flag.ContinueOnError)
+	reveal := fs.Bool("reveal-key", false, "substitute a real API key instead of $LLMTOP_API_KEY")
+	upstream := fs.String("upstream", "", "override the upstream base URL")
+	apiKey := fs.String("api-key", "", "API key to use when --reveal-key is set")
+	model := fs.String("model", "", "override the model field in the request body")
+	noStream := fs.Bool("no-stream", false, "force the request to non-streaming")
+	headersRaw := fs.String("headers", "", "comma-separated extra headers (k=v,k=v)")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	captured, err := st.Get(id)
+	if err != nil {
+		return err
+	}
+
+	opts := replay.CurlOptions{
+		UpstreamBaseURL: *upstream,
+		APIKey:          *apiKey,
+		RevealKey:       *reveal,
+		Model:           *model,
+	}
+	if *noStream {
+		f := false
+		opts.Stream = &f
+	}
+	if *headersRaw != "" {
+		opts.ExtraHeaders = parseHeaderList(*headersRaw)
+	}
+	if *reveal && opts.APIKey == "" {
+		// Fall back to env so reveal-key "just works" when the user
+		// has a key in their environment.
+		if v := os.Getenv("LLMTOP_API_KEY"); v != "" {
+			opts.APIKey = v
+		} else if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+			opts.APIKey = v
+		}
+	}
+	fmt.Println(replay.CurlCommand(captured, opts))
+	return nil
+}
+
+// runEdit opens the captured request body in $EDITOR, replays on save,
+// and prints the result like `replay` does. Exit codes:
+//
+//	0  request succeeded
+//	1  transport or non-2xx
+//	2  invalid JSON after edit (no request fired)
+func runEdit(id, rest string) error {
+	replayExitCode = 0
+	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
+	upstream := fs.String("upstream", "", "override the upstream base URL")
+	apiKey := fs.String("api-key", "", "override the upstream API key")
+	local := fs.Bool("local", false, "use http://localhost:11434/v1 (Ollama)")
+	timeout := fs.Duration("timeout", 30*time.Second, "request timeout")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	captured, err := st.Get(id)
+	if err != nil {
+		return err
+	}
+
+	ed, err := replay.Edit(captured)
+	if errors.Is(err, replay.ErrInvalidJSON) {
+		fmt.Fprintln(os.Stderr, "llm-top:", err, "(temp file:", ed.Path+")")
+		replayExitCode = 2
+		return nil
+	}
+	if err != nil && ed.Skipped {
+		fmt.Fprintln(os.Stderr, "llm-top:", err)
+	}
+	if ed.Body == "" {
+		return fmt.Errorf("edit produced empty body")
+	}
+
+	cfg := replay.ExecutionConfig{
+		Body:    ed.Body,
+		Timeout: *timeout,
+	}
+	if *local {
+		cfg.UpstreamBaseURL = "http://localhost:11434/v1"
+	} else if *upstream != "" {
+		cfg.UpstreamBaseURL = *upstream
+	} else {
+		cfg.UpstreamBaseURL = captured.Upstream
+	}
+	cfg.UpstreamAPIKey = *apiKey
+	if cfg.UpstreamAPIKey == "" {
+		cfg.UpstreamAPIKey = os.Getenv("LLMTOP_API_KEY")
+	}
+
+	res := replay.Execute(context.Background(), captured, cfg)
+	fmt.Println(replay.Summary(res))
+	body := replay.TruncateBody(res.ResponseBody, 4096)
+	if body != "" {
+		fmt.Println()
+		fmt.Println(body)
+	}
+	if res.Error != "" {
+		replayExitCode = 1
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		replayExitCode = 1
+	}
+	return nil
+}
+
+// parseHeaderList parses a "k=v,k=v" flag value into a map. Empty
+// pairs and missing '=' are silently dropped — this is a power-user
+// flag and we'd rather render nothing than error on a typo.
+func parseHeaderList(s string) map[string]string {
+	out := map[string]string{}
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		eq := strings.IndexByte(p, '=')
+		if eq < 0 {
+			continue
+		}
+		k := strings.TrimSpace(p[:eq])
+		v := strings.TrimSpace(p[eq+1:])
+		if k != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// runDiff renders a unified diff between two captured requests'
+// bodies. With --metrics, it instead prints a side-by-side per-request
+// metric delta (TTFT, total, tokens, cost).
+//
+//	llm-top diff <idA> <idB> [--metrics] [--sqlite <path>]
 func runDiff(idA, idB, rest string) error {
 	fs := flag.NewFlagSet("diff", flag.ContinueOnError)
 	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	metricsFlag := fs.Bool("metrics", false, "print side-by-side per-request metric deltas instead of body diff")
 	if err := fs.Parse(strings.Fields(rest)); err != nil {
 		return err
 	}
@@ -380,11 +642,57 @@ func runDiff(idA, idB, rest string) error {
 	if err != nil {
 		return fmt.Errorf("b: %w", err)
 	}
+	if *metricsFlag {
+		printMetricsDiff(a, b)
+		return nil
+	}
 	fmt.Printf("--- request %s\n+++ request %s\n", a.ID, b.ID)
 	printUnified(a.RequestBody, b.RequestBody, "request_body")
 	fmt.Printf("\n--- response %s\n+++ response %s\n", a.ID, b.ID)
 	printUnified(a.ResponseBody, b.ResponseBody, "response_body")
 	return nil
+}
+
+// printMetricsDiff renders a side-by-side metric comparison between two
+// captured requests. The output is plain text (no color) so it diffs
+// cleanly under version control and works in non-TTY captures.
+func printMetricsDiff(a, b proxy.Request) {
+	row := func(label, av, bv string) string {
+		return fmt.Sprintf("%-14s %14s   %14s\n", label, av, bv)
+	}
+	fmt.Printf("metric              %14s   %14s\n", a.ID, b.ID)
+	fmt.Println(strings.Repeat("─", 46))
+	costA, costB := "$?", "$?"
+	if a.CostUSD > 0 {
+		costA = fmt.Sprintf("$%.4f", a.CostUSD)
+	}
+	if b.CostUSD > 0 {
+		costB = fmt.Sprintf("$%.4f", b.CostUSD)
+	}
+	ttftA, ttftB := "-", "-"
+	if a.TTFTMillis > 0 {
+		ttftA = fmt.Sprintf("%dms", a.TTFTMillis)
+	}
+	if b.TTFTMillis > 0 {
+		ttftB = fmt.Sprintf("%dms", b.TTFTMillis)
+	}
+	fmt.Print(row("model", a.Model, b.Model))
+	fmt.Print(row("upstream", a.Upstream, b.Upstream))
+	fmt.Print(row("status", fmt.Sprintf("%d", a.StatusCode), fmt.Sprintf("%d", b.StatusCode)))
+	fmt.Print(row("stream", fmt.Sprintf("%t", a.Stream), fmt.Sprintf("%t", b.Stream)))
+	fmt.Print(row("ttft", ttftA, ttftB))
+	fmt.Print(row("total", fmt.Sprintf("%dms", a.TotalMillis), fmt.Sprintf("%dms", b.TotalMillis)))
+	fmt.Print(row("in_tokens", fmt.Sprintf("%d", a.PromptTokens), fmt.Sprintf("%d", b.PromptTokens)))
+	fmt.Print(row("out_tokens", fmt.Sprintf("%d", a.OutputTokens), fmt.Sprintf("%d", b.OutputTokens)))
+	fmt.Print(row("cost", costA, costB))
+	errA, errB := "-", "-"
+	if a.Error != "" {
+		errA = truncate(a.Error, 30)
+	}
+	if b.Error != "" {
+		errB = truncate(b.Error, 30)
+	}
+	fmt.Print(row("error", errA, errB))
 }
 
 func printUnified(a, b, label string) {
