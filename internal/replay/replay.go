@@ -249,17 +249,106 @@ func Execute(ctx context.Context, captured proxy.Request, cfg ExecutionConfig) R
 	return res
 }
 
-// joinURL concatenates a base URL and an HTTP path without mangling
-// double slashes in the path. base must include scheme; path must start
-// with '/'.
+// joinURL concatenates a base URL with a captured request path in a way
+// that survives "host:port" (no scheme), "https://host/v1" (API prefix),
+// and "https://host/v1/chat/completions" (full endpoint) shapes.
+//
+// The algorithm:
+//  1. Normalize: prepend http:// if base has no scheme.
+//  2. Strip trailing slashes from base and leading slashes from path.
+//  3. If path is empty, return base.
+//  4. If base ends with the full path, return base.
+//  5. Otherwise find the longest trailing path-segment of base that is
+//     also a leading segment of path, and strip that overlap from path
+//     before joining. Example: base="/v1", path="/v1/chat/completions"
+//     → "/v1/chat/completions".
+//  6. Fallback: simple slash-join.
 func joinURL(base, p string) string {
-	if !strings.HasSuffix(base, "/") && !strings.HasPrefix(p, "/") {
-		return base + "/" + p
+	if base == "" {
+		return p
 	}
-	if strings.HasSuffix(base, "/") && strings.HasPrefix(p, "/") {
-		return base + strings.TrimPrefix(p, "/")
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
 	}
-	return base + p
+	cleanBase := strings.TrimRight(base, "/")
+	cleanPath := strings.TrimLeft(p, "/")
+	if cleanPath == "" {
+		return cleanBase
+	}
+	// Case 1: base already ends with the full captured path.
+	if cleanBase == cleanPath || strings.HasSuffix(cleanBase, "/"+cleanPath) {
+		return cleanBase
+	}
+	// Case 2: find the longest trailing segment of base that matches
+	// a leading segment of path. We walk from longest possible match
+	// down to length 1 to find the right overlap.
+	basePath := pathAfterScheme(cleanBase)
+	if basePath != "" {
+		// Walk segments from longest to shortest.
+		for n := len(basePath); n > 1; n-- {
+			if n > len(basePath) {
+				continue
+			}
+			trial := basePath[len(basePath)-n:]
+			if !strings.HasPrefix(cleanPath, trial) {
+				continue
+			}
+			// trial must end at a path-segment boundary in BOTH
+			// basePath and cleanPath for this to be a real match.
+			if !segmentBoundary(basePath, len(basePath)-n) {
+				continue
+			}
+			if !segmentBoundary(cleanPath, 0) || len(cleanPath) < n {
+				continue
+			}
+			// Boundary in cleanPath: either cleanPath == trial exactly,
+			// or the next char in cleanPath is '/'.
+			if len(cleanPath) == n || cleanPath[n] == '/' {
+				rest := cleanPath[n:]
+				rest = strings.TrimLeft(rest, "/")
+				if rest == "" {
+					return cleanBase
+				}
+				return cleanBase + "/" + rest
+			}
+		}
+	}
+	// Case 3: simple join.
+	if strings.HasSuffix(base, "/") {
+		return base + cleanPath
+	}
+	if strings.HasPrefix(p, "/") {
+		return base + p
+	}
+	return base + "/" + p
+}
+
+// pathAfterScheme returns the path portion of a URL ("https://host/v1/x" → "/v1/x").
+// Returns "" if there's no path (just a host).
+func pathAfterScheme(u string) string {
+	i := strings.Index(u, "://")
+	if i < 0 {
+		return ""
+	}
+	rest := u[i+3:]
+	// Skip past host:port.
+	slash := strings.IndexByte(rest, '/')
+	if slash < 0 {
+		return ""
+	}
+	return rest[slash:]
+}
+
+// segmentBoundary reports whether pos is at a path-segment boundary in s.
+// A boundary is the start of s, or any position immediately after a '/'.
+func segmentBoundary(s string, pos int) bool {
+	if pos == 0 {
+		return true
+	}
+	if pos >= len(s) {
+		return true
+	}
+	return s[pos-1] == '/'
 }
 
 // millisBetween rounds a time.Duration to the nearest millisecond,

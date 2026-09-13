@@ -28,9 +28,11 @@ import (
 	"time"
 
 	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
+	"github.com/aniketkarne-com/llm-top/internal/compare"
 	"github.com/aniketkarne-com/llm-top/internal/config"
 	"github.com/aniketkarne-com/llm-top/internal/demo"
 	"github.com/aniketkarne-com/llm-top/internal/metrics"
+	"github.com/aniketkarne-com/llm-top/internal/pricing"
 	"github.com/aniketkarne-com/llm-top/internal/proxy"
 	"github.com/aniketkarne-com/llm-top/internal/redactor"
 	"github.com/aniketkarne-com/llm-top/internal/replay"
@@ -53,6 +55,7 @@ func main() {
 // variable rather than a second return value because run()'s
 // signature is fixed at (args []string) error.
 var replayExitCode int
+var compareExitCode int
 
 func run(args []string) error {
 	// Default to "integrated" mode when no subcommand is given. If the user
@@ -87,6 +90,16 @@ func run(args []string) error {
 				return fmt.Errorf("usage: llm-top diff <id-a> <id-b> [--metrics] [--sqlite <path>]")
 			}
 			return runDiff(rest[0], rest[1], strings.Join(rest[2:], " "))
+		case "compare":
+			rest := filtered[1:]
+			if len(rest) < 1 || strings.HasPrefix(rest[0], "-") {
+				return fmt.Errorf("usage: llm-top compare <request-id> [--target name=url|key,...] [--model X] [--local] [--timeout 30s] [--concurrency N] [--format text|json] [--sqlite <path>]")
+			}
+			err := runCompare(rest[0], strings.Join(rest[1:], " "))
+			if compareExitCode != 0 {
+				os.Exit(compareExitCode)
+			}
+			return err
 		case "replay":
 			rest := filtered[1:]
 			if len(rest) < 1 || strings.HasPrefix(rest[0], "-") {
@@ -785,4 +798,172 @@ Environment variables (override defaults; flags override env):
   LLMTOP_LISTEN, LLMTOP_UPSTREAM, LLMTOP_API_KEY, LLMTOP_BUFFER,
   LLMTOP_UI, LLMTOP_SQLITE, LLMTOP_MODE
 `))
+}
+
+// runCompare re-fires a captured request against one or more targets in
+// parallel and prints the side-by-side table.
+//
+//	llm-top compare <id>
+//	  [--target "name=baseurl|apikey,name=baseurl|apikey,..."] (repeatable)
+//	  [--model X]                   override model on all targets
+//	  [--local]                     add http://localhost:11434/v1 as 'local'
+//	  [--timeout 30s]               per-target timeout
+//	  [--concurrency N]             max parallel targets (default = len(targets))
+//	  [--format text|json]
+//	  [--sqlite PATH]
+func runCompare(id, rest string) error {
+	compareExitCode = 0 // reset on entry
+
+	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
+	targetList := fs.String("target", "", "comma-separated list of name=url|apikey targets")
+	model := fs.String("model", "", "override model on all targets")
+	local := fs.Bool("local", false, "add http://localhost:11434/v1 as 'local' target")
+	timeout := fs.Duration("timeout", 30*time.Second, "per-target timeout")
+	concurrency := fs.Int("concurrency", 0, "max parallel targets (default = all)")
+	format := fs.String("format", "text", "output format: text or json")
+	sqlitePath := fs.String("sqlite", "", "sqlite db path (default LLMTOP_SQLITE or ./llm-top.db)")
+	if err := fs.Parse(strings.Fields(rest)); err != nil {
+		return err
+	}
+
+	st, cleanup, err := openCLIStore(*sqlitePath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	captured, err := st.Get(id)
+	if err != nil {
+		return err
+	}
+
+	targets, err := buildCompareTargets(*targetList, *local, *model)
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("no targets configured: use --target or --local (and set OPENAI_API_KEY / ANTHROPIC_API_KEY env vars for defaults)")
+	}
+
+	result := compare.Run(context.Background(), captured, targets, compare.Options{
+		Timeout:     *timeout,
+		Concurrency: *concurrency,
+		Pricing:     pricing.Defaults(),
+	})
+
+	switch *format {
+	case "json":
+		if err := compare.RenderJSON(os.Stdout, result); err != nil {
+			return err
+		}
+	default:
+		compare.RenderText(os.Stdout, captured.ID, result.Rows)
+	}
+
+	// Exit code: 0 if any 2xx, 1 if all targets failed.
+	anyOK := false
+	for _, r := range result.Rows {
+		if r.StatusCode >= 200 && r.StatusCode < 300 && r.Error == "" {
+			anyOK = true
+			break
+		}
+	}
+	if !anyOK {
+		compareExitCode = 1
+	}
+	return nil
+}
+
+// buildCompareTargets parses the --target flag (repeatable comma-separated)
+// and appends --local if requested. Each target string is "name=baseurl|apikey".
+// If no --target is given, falls back to env-driven defaults so the user can
+// `llm-top compare <id> --local` and get something useful immediately.
+func buildCompareTargets(targetFlag string, local bool, modelOverride string) ([]compare.Target, error) {
+	var targets []compare.Target
+	if targetFlag != "" {
+		for _, raw := range strings.Split(targetFlag, ",") {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			t, err := parseCompareTarget(raw, modelOverride)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, t)
+		}
+	} else {
+		// Env defaults so `compare <id> --local` does something useful
+		// even without any --target flags.
+		if v := os.Getenv("LLMTOP_TARGET_GPT55"); v != "" {
+			t, err := parseCompareTarget("gpt-5.5="+v, modelOverride)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, t)
+		}
+		if v := os.Getenv("LLMTOP_TARGET_CLAUDE"); v != "" {
+			t, err := parseCompareTarget("claude-sonnet-5="+v, modelOverride)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, t)
+		}
+		// Built-in defaults: openai / anthropic if their env keys are set.
+		if len(targets) == 0 {
+			if k := os.Getenv("OPENAI_API_KEY"); k != "" {
+				targets = append(targets, compare.Target{
+					Name: "gpt-5.5", BaseURL: "https://api.openai.com/v1", APIKey: k, Model: "gpt-5.5",
+				})
+			}
+			if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
+				targets = append(targets, compare.Target{
+					Name: "claude-sonnet-5", BaseURL: "https://api.anthropic.com/v1", APIKey: k, Model: "claude-sonnet-5",
+				})
+			}
+		}
+	}
+	if local {
+		targets = append(targets, compare.Target{
+			Name: "local", BaseURL: "http://localhost:11434/v1", Model: "", // empty = use captured model
+		})
+	}
+	// Apply model override uniformly if requested and the target didn't set one.
+	if modelOverride != "" {
+		for i := range targets {
+			if targets[i].Model == "" {
+				targets[i].Model = modelOverride
+			}
+		}
+	}
+	return targets, nil
+}
+
+// parseCompareTarget parses "name=baseurl|apikey" into a compare.Target.
+// The "apikey" part is optional (empty for local targets).
+func parseCompareTarget(raw, modelOverride string) (compare.Target, error) {
+	eq := strings.IndexByte(raw, '=')
+	if eq < 0 {
+		return compare.Target{}, fmt.Errorf("target %q: missing '=' (expected name=baseurl|apikey)", raw)
+	}
+	name := strings.TrimSpace(raw[:eq])
+	rest := raw[eq+1:]
+	var baseURL, apiKey string
+	if pipe := strings.IndexByte(rest, '|'); pipe >= 0 {
+		baseURL = strings.TrimSpace(rest[:pipe])
+		apiKey = strings.TrimSpace(rest[pipe+1:])
+	} else {
+		baseURL = strings.TrimSpace(rest)
+	}
+	if name == "" {
+		return compare.Target{}, fmt.Errorf("target %q: empty name", raw)
+	}
+	if baseURL == "" {
+		return compare.Target{}, fmt.Errorf("target %q: empty base URL", raw)
+	}
+	return compare.Target{
+		Name:    name,
+		BaseURL: baseURL,
+		APIKey:  apiKey,
+		Model:   modelOverride, // empty here means "use captured model"
+	}, nil
 }

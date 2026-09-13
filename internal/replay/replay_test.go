@@ -381,3 +381,28 @@ func TestTruncateBody(t *testing.T) {
 		}
 	}
 }
+
+func TestJoinURL(t *testing.T) {
+	cases := []struct {
+		base, path, want string
+	}{
+		// Base already includes the captured path — don't double up.
+		{"https://api.openai.com/v1/chat/completions", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/v1/chat/completions", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions"},
+		// Base has the API prefix but not the full path.
+		{"https://api.openai.com/v1", "/v1/chat/completions", "https://api.openai.com/v1/chat/completions"},
+		// Bare host:port (no scheme) — should prepend http:// and join.
+		{"127.0.0.1:18101", "/v1/chat/completions", "http://127.0.0.1:18101/v1/chat/completions"},
+		// Trailing slash handling.
+		{"https://api.openai.com/v1/", "/chat/completions", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/v1", "/chat/completions", "https://api.openai.com/v1/chat/completions"},
+		// Empty base — return path as-is.
+		{"", "/v1/chat/completions", "/v1/chat/completions"},
+	}
+	for _, c := range cases {
+		got := joinURL(c.base, c.path)
+		if got != c.want {
+			t.Errorf("joinURL(%q, %q) = %q, want %q", c.base, c.path, got, c.want)
+		}
+	}
+}
