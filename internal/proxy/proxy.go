@@ -171,7 +171,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"service":     "llm-top",
-			"version":     "0.1.0",
+			"version":     "0.2.0",
 			"upstream":    s.cfg.UpstreamBaseURL,
 			"requests":    s.totalRequests.Load(),
 			"errors":      s.totalErrors.Load(),
