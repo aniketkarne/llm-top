@@ -25,10 +25,10 @@ import (
 	"os"
 	"time"
 
-	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
-	"github.com/aniketkarne-com/llm-top/internal/metrics"
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
-	"github.com/aniketkarne-com/llm-top/internal/redactor"
+	ring "github.com/aniketkarne/llm-top/internal/buffer"
+	"github.com/aniketkarne/llm-top/internal/metrics"
+	"github.com/aniketkarne/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/redactor"
 )
 
 func main() {
@@ -72,7 +72,7 @@ func main() {
 
 	// Fire three requests.
 	for i := 0; i < 3; i++ {
-		body := fmt.Sprintf(`{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hello #%d"}]}`, i+1)
+		body := fmt.Sprintf(`{"model":"gpt-6-luna","messages":[{"role":"user","content":"hello #%d"}]}`, i+1)
 		resp, err := http.Post("http://127.0.0.1:8081/v1/chat/completions",
 			"application/json", bytes.NewReader([]byte(body)))
 		if err != nil {

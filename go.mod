@@ -1,4 +1,4 @@
-module github.com/aniketkarne-com/llm-top
+module github.com/aniketkarne/llm-top
 
 go 1.27.1
 

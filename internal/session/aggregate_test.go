@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // mkReq constructs a proxy.Request with the given timing fields. We

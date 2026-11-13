@@ -4,14 +4,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aniketkarne-com/llm-top/releases/latest"><img src="https://img.shields.io/github/v/release/aniketkarne-com/llm-top?style=flat-square&label=release" alt="Release"></a>
-  <a href="https://github.com/aniketkarne-com/llm-top/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/aniketkarne-com/llm-top/tests.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
-  <a href="https://github.com/aniketkarne-com/llm-top/blob/main/LICENSE"><img src="https://img.shields.io/github/license/aniketkarne-com/llm-top?style=flat-square" alt="License: MIT"></a>
-  <a href="https://go.dev/"><img src="https://img.shields.io/badge/go-1.21%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.21+"></a>
+  <a href="https://github.com/aniketkarne/llm-top/releases/latest"><img src="https://img.shields.io/github/v/release/aniketkarne/llm-top?style=flat-square&label=release" alt="Release"></a>
+  <a href="https://github.com/aniketkarne/llm-top/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/aniketkarne/llm-top/tests.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
+  <a href="https://github.com/aniketkarne/llm-top/blob/main/LICENSE"><img src="https://img.shields.io/github/license/aniketkarne/llm-top?style=flat-square" alt="License: MIT"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/go-1.27%2B-00ADD8?style=flat-square&logo=go" alt="Go 1.27+"></a>
 </p>
 
 <p align="center">
-  <b>101 tests pass.</b> Single static binary. <b>Zero dependencies</b> at runtime — just point your code at the local proxy and watch every LLM call live.
+  <b>287 tests pass.</b> Single static binary. <b>Zero dependencies</b> at runtime — just point your code at the local proxy and watch every LLM call live.
 </p>
 
 <img width="1146" height="569" alt="image" src="https://github.com/user-attachments/assets/faef2d1a-2e59-449a-94c3-6e21a5d23f52" />
@@ -64,8 +64,8 @@ an account, paste your API key, wait for indexing."
 ## Quickstart — 30 seconds
 
 ```bash
-# 1. Install
-go install github.com/aniketkarne-com/llm-top/cmd/llm-top@latest
+# 1. Install (Go 1.27+)
+go install github.com/aniketkarne/llm-top/cmd/llm-top@main
 
 # 2. Try the zero-deps demo (no API key, no network, ~2s)
 llm-top demo
@@ -79,7 +79,7 @@ LLMTOP_UPSTREAM=https://api.openai.com \
 OPENAI_BASE_URL=http://127.0.0.1:7777 OPENAI_API_KEY=anything curl \
   http://127.0.0.1:7777/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}],"stream":true}'
+  -d '{"model":"gpt-6-luna","messages":[{"role":"user","content":"hi"}],"stream":true}'
 ```
 
 You should see live requests, TTFT, token counts, and the redacted prompt /
@@ -116,15 +116,17 @@ response scroll through the TUI. Watch the "avg TTFT" settle within 10 calls.
 ## Install
 
 ```bash
-# Recommended: go install (requires Go 1.21+)
-go install github.com/aniketkarne-com/llm-top/cmd/llm-top@latest
-
-# macOS / Linux binary download from the latest release:
-curl -L https://github.com/aniketkarne-com/llm-top/releases/latest/download/llm-top_$(uname -s)_$(uname -m).tar.gz | tar xz
-sudo mv llm-top /usr/local/bin/
+# Recommended: go install (requires Go 1.27+)
+go install github.com/aniketkarne/llm-top/cmd/llm-top@main
 
 # With SQLite session dump enabled:
-go install -tags sqlite github.com/aniketkarne-com/llm-top/cmd/llm-top@latest
+go install -tags sqlite github.com/aniketkarne/llm-top/cmd/llm-top@main
+
+# Prebuilt binary — the current release assets (llm-top, llm-top-sqlite)
+# are macOS arm64. Other platforms: go install (above) or build from source.
+curl -L -o llm-top \
+  "https://github.com/aniketkarne/llm-top/releases/latest/download/llm-top"
+chmod +x llm-top && sudo mv llm-top /usr/local/bin/
 ```
 
 ## Configuration
@@ -195,10 +197,14 @@ response).
 - **Not an LLM client library.** llm-top is a passive observer — it
   doesn't talk to OpenAI for you. It proxies requests and captures
   metrics. Your existing code works unchanged.
-- **Not a tracing/metrics platform.** No Prometheus, OTLP, Datadog, or
-  Grafana integration. Counters are local to the running process. For
-  long-term observability, use a real APM tool *and* llm-top for the
-  dev-loop UX.
+- **Local-only metrics, by default.** Counters and p50/p95/p99 aggregates
+  live in the running process and are lost on shutdown (unless the
+  SQLite build is enabled). For long-term observability, point Prometheus
+  at the in-process `/metrics` endpoint (`examples/docker-compose.yml`
+  brings up Prometheus + Grafana with a starter dashboard) or use a
+  real APM tool *and* llm-top for the dev-loop UX. OTLP, Datadog, and
+  OpenTelemetry exporters are intentionally not provided — there is
+  no good reason for this proxy to know about them.
 - **Not multi-process safe.** The ring buffer is in-memory. If you run
   two llm-top instances on the same machine, they don't share state.
   SQLite gives you a single-process durable record; for cross-process
@@ -220,14 +226,18 @@ response).
 gofmt -w .
 go vet ./...
 go test ./...
+go test -tags sqlite ./...
 go test -race ./...
 go build -o bin/llm-top ./cmd/llm-top
 go build -tags sqlite -o bin/llm-top-sqlite ./cmd/llm-top
 ```
 
-101 tests across 8 packages cover happy/edge cases for SSE parsing,
-redaction, ring buffer eviction, metrics aggregation, the proxy, and the
-demo orchestrator. Race detector clean.
+287 tests across 16 packages (269 without the sqlite build tag —
+`internal/store` tests run only under `-tags sqlite`) cover happy/edge
+cases for SSE parsing, redaction, ring buffer eviction, metrics
+aggregation, the proxy, the demo orchestrator, sessions,
+replay/curl/edit/diff, compare, anomalies, and the Prometheus exporter.
+Race detector clean.
 
 ## License
 

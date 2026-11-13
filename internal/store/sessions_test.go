@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/session"
+	"github.com/aniketkarne/llm-top/internal/session"
 )
 
 // mkSession returns a Session with a populated ID + StartedAt so we

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // openTemp returns a Store backed by a per-test temp file. The file is
@@ -182,6 +182,32 @@ func TestRecentOrder(t *testing.T) {
 	if got[0].ID != "e" || got[1].ID != "d" || got[2].ID != "c" {
 		t.Errorf("Recent ordering wrong: got %v %v %v",
 			got[0].ID, got[1].ID, got[2].ID)
+	}
+}
+
+// TestListTieBreakOnID pins the ordering contract the proxy's
+// monotonic NewID exists for: when two requests share a StartedAt
+// (fast ingest can land several in the same nanosecond), List must
+// fall back to descending ID — which is creation order — instead of
+// the SQLite sorter's unspecified tie order. sampleRequest uses a
+// fixed StartedAt, so every case here is a tie.
+func TestListTieBreakOnID(t *testing.T) {
+	s := openTemp(t)
+	for _, id := range []string{"aaaa", "bbbb", "cccc"} {
+		if err := s.Insert(sampleRequest(id, "gpt-5.5")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.List(ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3, got %d", len(got))
+	}
+	// Equal StartedAt for all three: order must be descending ID.
+	if got[0].ID != "cccc" || got[1].ID != "bbbb" || got[2].ID != "aaaa" {
+		t.Errorf("tie-break wrong: got %v %v %v", got[0].ID, got[1].ID, got[2].ID)
 	}
 }
 

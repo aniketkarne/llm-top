@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // makeCaptured builds a typical captured Request for tests.

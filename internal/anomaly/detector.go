@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // Detector is the rolling-baseline anomaly detector. Configure it

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -92,23 +93,41 @@ type Request struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
-// NewID returns a 16-hex-char ID derived from the current time and
-// crypto-random bytes. The time prefix keeps IDs roughly sortable by
-// creation order in human-readable listings; the random tail makes
-// collisions effectively impossible without a heavyweight ULID dep.
+// NewID returns a 16-hex-char ID that is strictly monotonic per process:
+// every call returns a string greater (in lexicographic order) than the
+// previous one. This lets the SQLite sort tie-break on ID work
+// deterministically even when two records share the same StartedAt
+// nanosecond (e.g. fast unit tests, sessions created in the same
+// goroutine tick).
 //
-// 16 hex chars = 64 bits: 32 bits of low-order UnixNano (repeats
-// within a nanosecond, hence the 32 bits of random entropy).
+// 16 hex chars = 64 bits: the upper 32 bits of UnixNano as the time
+// prefix (monotonic across the full nanosecond range until year 2554)
+// plus a 32-bit atomic counter as the tail. The counter is seeded
+// from crypto/rand at process startup so two simultaneously-running
+// llm-top instances are very unlikely to pick the same starting
+// sequence and collide within the same nanosecond.
 func NewID() string {
-	var rnd [4]byte
-	_, _ = rand.Read(rnd[:])
-	// Use the low 32 bits of UnixNano — UnixNano today is ~60 bits
-	// wide so the upper bits would have widened the output beyond
-	// 16 hex chars. 32 bits of nanoseconds (~4 seconds of range
-	// before wraparound at year 2106) plus 32 bits of random gives
-	// ~64 bits of entropy overall.
 	ns := uint64(time.Now().UTC().UnixNano())
-	return fmt.Sprintf("%08x%08x", uint32(ns), rnd)
+	prefix := uint32(ns >> 32)
+	seq := newIDCounter.Add(1)
+	return fmt.Sprintf("%08x%08x", prefix, uint32(seq))
+}
+
+// newIDCounter holds the per-process monotonic counter. Seeded once
+// at package init: 31 random bits from crypto/rand so two llm-top
+// processes started at the same nanosecond rarely share a starting
+// sequence, with the top bit kept clear so the 32-bit tail has ~2^31
+// increments of headroom before it could wrap inside one ~4.3-second
+// time-prefix window (a wrap would break monotonicity; 2^31 NewID
+// calls per window is unreachable at any real call rate).
+var newIDCounter atomic.Uint64
+
+func init() {
+	var seed [4]byte
+	_, _ = rand.Read(seed[:])
+	// 31-bit seed: top bit of the first byte cleared.
+	newIDCounter.Store(uint64(seed[0]&0x7f)<<24 | uint64(seed[1])<<16 |
+		uint64(seed[2])<<8 | uint64(seed[3]))
 }
 
 // HashPrompt returns the lowercase sha256 hex digest of the user-role

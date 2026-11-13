@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 func TestEdit_HappyPath(t *testing.T) {

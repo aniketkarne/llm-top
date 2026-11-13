@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // AggregateStats summarizes a slice of captured requests. All fields are

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // Session is a logical bucket of proxied requests. Sessions have a

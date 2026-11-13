@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/pricing"
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/pricing"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // fakeTarget returns an httptest server that mimics an OpenAI-compatible
@@ -35,7 +35,7 @@ func fakeTarget(t *testing.T, delay time.Duration, completionTokens int, body st
 			"id":      "chatcmpl-compare",
 			"object":  "chat.completion",
 			"created": time.Now().Unix(),
-			"model":   "gpt-5.5-mini",
+			"model":   "gpt-6-luna",
 			"choices": []map[string]any{{
 				"index":         0,
 				"message":       map[string]string{"role": "assistant", "content": body},
@@ -54,9 +54,9 @@ func sampleRequest() proxy.Request {
 		StartedAt: time.Now(),
 		Method:    "POST",
 		Path:      "/v1/chat/completions",
-		Model:     "gpt-5.5-mini",
+		Model:     "gpt-6-luna",
 		Stream:    false,
-		RequestBody: `{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hi"}]}`,
+		RequestBody: `{"model":"gpt-6-luna","messages":[{"role":"user","content":"hi"}]}`,
 	}
 }
 
@@ -65,8 +65,8 @@ func TestRunHappyPath(t *testing.T) {
 	b := fakeTarget(t, 50*time.Millisecond, 3, "from-b", 0)
 	res := Run(context.Background(), sampleRequest(),
 		[]Target{
-			{Name: "fast", BaseURL: a.URL, Model: "gpt-5.5-mini"},
-			{Name: "slow", BaseURL: b.URL, Model: "claude-sonnet-5"},
+			{Name: "fast", BaseURL: a.URL, Model: "gpt-6-luna"},
+			{Name: "slow", BaseURL: b.URL, Model: "claude-sonnet-5-5"},
 		},
 		Options{Pricing: pricing.Defaults()},
 	)
@@ -87,10 +87,10 @@ func TestRunHappyPath(t *testing.T) {
 	}
 	// Cost computed for the models that are in the default table.
 	if !res.Rows[0].CostKnown {
-		t.Errorf("fast row cost unknown; want known for gpt-5.5-mini")
+		t.Errorf("fast row cost unknown; want known for gpt-6-luna")
 	}
 	if !res.Rows[1].CostKnown {
-		t.Errorf("slow row cost unknown; want known for claude-sonnet-5")
+		t.Errorf("slow row cost unknown; want known for claude-sonnet-5-5")
 	}
 	// Response body captured.
 	if res.Rows[0].ResponseBody == "" || res.Rows[1].ResponseBody == "" {
@@ -241,14 +241,14 @@ func TestRunModelOverride(t *testing.T) {
 	defer srv.Close()
 
 	res := Run(context.Background(), sampleRequest(),
-		[]Target{{Name: "x", BaseURL: srv.URL, Model: "claude-sonnet-5"}},
+		[]Target{{Name: "x", BaseURL: srv.URL, Model: "claude-sonnet-5-5"}},
 		Options{Pricing: pricing.Defaults()},
 	)
-	if seenModel != "claude-sonnet-5" {
+	if seenModel != "claude-sonnet-5-5" {
 		t.Errorf("model not rewritten: upstream saw %q", seenModel)
 	}
-	if res.Rows[0].Model != "claude-sonnet-5" {
-		t.Errorf("row model: want claude-sonnet-5, got %q", res.Rows[0].Model)
+	if res.Rows[0].Model != "claude-sonnet-5-5" {
+		t.Errorf("row model: want claude-sonnet-5-5, got %q", res.Rows[0].Model)
 	}
 }
 
