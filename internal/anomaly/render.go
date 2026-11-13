@@ -15,10 +15,10 @@ import (
 //
 //	⚠ 3 anomalies
 //	─────────────────────────────
-//	WARN  ttft_spike       ttft 5,200ms on gpt-5.5 (baseline 420ms, x12.4)
-//	WARN  latency_spike    total 12,000ms on claude-sonnet-5 (baseline 3,200ms, x3.8)
-//	INFO  token_explosion  8,400 output tokens on gpt-5.5-mini (baseline 730, x11.5)
-//	ALERT error_burst      75% errors on gpt-5.5/openai in last 20 requests (15/20)
+//	WARN  ttft_spike       ttft 5,200ms on gpt-6-luna (baseline 420ms, x12.4)
+//	WARN  latency_spike    total 12,000ms on claude-sonnet-5-5 (baseline 3,200ms, x3.8)
+//	INFO  token_explosion  8,400 output tokens on gpt-6.1-terra (baseline 730, x11.5)
+//	ALERT error_burst      75% errors on gpt-6-luna/openai in last 20 requests (15/20)
 //
 // Empty input renders a single line so callers can blindly print.
 func RenderText(w io.Writer, anomalies []Anomaly) {

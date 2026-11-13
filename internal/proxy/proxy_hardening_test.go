@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
-	"github.com/aniketkarne-com/llm-top/internal/metrics"
-	"github.com/aniketkarne-com/llm-top/internal/redactor"
+	ring "github.com/aniketkarne/llm-top/internal/buffer"
+	"github.com/aniketkarne/llm-top/internal/metrics"
+	"github.com/aniketkarne/llm-top/internal/redactor"
 )
 
 // --- Hardening: edge cases for the proxy ---

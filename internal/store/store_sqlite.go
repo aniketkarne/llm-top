@@ -25,9 +25,9 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/aniketkarne-com/llm-top/internal/anomaly"
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
-	"github.com/aniketkarne-com/llm-top/internal/session"
+	"github.com/aniketkarne/llm-top/internal/anomaly"
+	"github.com/aniketkarne/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/session"
 )
 
 // Session is an alias for session.Session so callers (CLI, tests)
@@ -268,7 +268,7 @@ func (s *Store) List(f ListFilter) ([]proxy.Request, error) {
 		q += " AND started_at < ?"
 		args = append(args, f.Until.UTC().Format(time.RFC3339Nano))
 	}
-	q += " ORDER BY started_at DESC"
+	q += " ORDER BY started_at DESC, id DESC"
 	if f.Limit > 0 {
 		q += " LIMIT ?"
 		args = append(args, f.Limit)
@@ -426,7 +426,7 @@ func (s *Store) GetSession(id string) (Session, error) {
 func (s *Store) ListSessions() ([]Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT id, name, label, tags, started_at, ended_at FROM sessions ORDER BY started_at DESC`)
+	rows, err := s.db.Query(`SELECT id, name, label, tags, started_at, ended_at FROM sessions ORDER BY started_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +447,7 @@ func (s *Store) ListSessions() ([]Session, error) {
 func (s *Store) ActiveSession() (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	row := s.db.QueryRow(`SELECT id, name, label, tags, started_at, ended_at FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1`)
+	row := s.db.QueryRow(`SELECT id, name, label, tags, started_at, ended_at FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC, id DESC LIMIT 1`)
 	sess, err := s.scanSessionRow(row)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {

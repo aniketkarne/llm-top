@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // fakeClock returns a deterministic clock that advances by 1ms on

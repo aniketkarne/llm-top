@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/pricing"
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
-	"github.com/aniketkarne-com/llm-top/internal/replay"
+	"github.com/aniketkarne/llm-top/internal/pricing"
+	"github.com/aniketkarne/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/replay"
 )
 
 // MaxResponseBodyBytes caps the per-row ResponseBody we keep in memory

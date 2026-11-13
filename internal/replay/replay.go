@@ -34,8 +34,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/pricing"
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/pricing"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 // ExecutionConfig configures a single replay invocation. Zero values

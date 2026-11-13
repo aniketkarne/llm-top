@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
+	ring "github.com/aniketkarne/llm-top/internal/buffer"
 )
 
 // KeyMsg is the minimal key-event shape the UI consumes. The package

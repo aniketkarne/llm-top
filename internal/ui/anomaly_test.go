@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/aniketkarne-com/llm-top/internal/anomaly"
+	"github.com/aniketkarne/llm-top/internal/anomaly"
 )
 
 func TestAnomalyBadge(t *testing.T) {

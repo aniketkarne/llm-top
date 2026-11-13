@@ -26,6 +26,26 @@ func TestNewIDUniqueness(t *testing.T) {
 	}
 }
 
+// TestNewIDStrictlyMonotonic pins down the tie-break contract that
+// TestManagerListNewestFirst in internal/session relies on: even when
+// two NewID calls share the same nanosecond (a 1000-iteration loop on
+// fast hardware produces many such collisions), the lexicographic
+// order of the returned IDs must match creation order. The previous
+// implementation used crypto-random for the low 32 bits and could
+// flip the order across same-nanosecond IDs; this test guards the
+// regression.
+func TestNewIDStrictlyMonotonic(t *testing.T) {
+	const n = 1000
+	prev := NewID()
+	for i := 1; i < n; i++ {
+		cur := NewID()
+		if cur <= prev {
+			t.Fatalf("non-monotonic at i=%d: prev=%q cur=%q", i, prev, cur)
+		}
+		prev = cur
+	}
+}
+
 func TestHashPromptStability(t *testing.T) {
 	a := []byte(`{"model":"x","messages":[{"role":"user","content":"hello world"}]}`)
 	b := []byte(`{"model":"x","messages":[{"role":"user","content":"hello    world"}]}`)

@@ -62,7 +62,7 @@ nfpms:
       - rpm
     maintainer: "Aniket Karne <aniketkarne@users.noreply.github.com>"
     description: "OpenAI-compatible HTTP reverse proxy with TUI dashboard, SSE metrics, and prompt capture."
-    homepage: "https://github.com/aniketkarne-com/llm-top"
+    homepage: "https://github.com/aniketkarne/llm-top"
     license: "MIT"
     section: "utils"
     priority: "optional"
@@ -74,16 +74,16 @@ nfpms:
 
 release:
   github:
-    owner: aniketkarne-com
+    owner: aniketkarne
     name: llm-top
   prerelease: auto
   draft: false
   name_template: "{{ .ProjectName }} v{{ .Version }}"
   header: |
     ## llm-top {{ .Tag }}
-    See the [README](https://github.com/aniketkarne-com/llm-top#readme) for full docs.
+    See the [README](https://github.com/aniketkarne/llm-top#readme) for full docs.
   footer: |
-    **Full Changelog**: https://github.com/aniketkarne-com/llm-top/compare/{{ .PreviousTag }}...{{ .Tag }}
+    **Full Changelog**: https://github.com/aniketkarne/llm-top/compare/{{ .PreviousTag }}...{{ .Tag }}
 
 changelog:
   use: git

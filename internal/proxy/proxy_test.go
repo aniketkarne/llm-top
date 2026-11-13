@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
-	"github.com/aniketkarne-com/llm-top/internal/metrics"
-	"github.com/aniketkarne-com/llm-top/internal/redactor"
+	ring "github.com/aniketkarne/llm-top/internal/buffer"
+	"github.com/aniketkarne/llm-top/internal/metrics"
+	"github.com/aniketkarne/llm-top/internal/redactor"
 )
 
 // startFakeUpstream returns an httptest.Server that mimics an OpenAI-compatible
@@ -348,7 +348,7 @@ func TestPersistsStructuredRequest(t *testing.T) {
 	defer proxy.Close()
 
 	// Non-streaming.
-	body := bytes.NewBufferString(`{"model":"gpt-5.5-mini","messages":[{"role":"user","content":"hi"}]}`)
+	body := bytes.NewBufferString(`{"model":"gpt-6-luna","messages":[{"role":"user","content":"hi"}]}`)
 	resp, err := http.Post(proxy.URL+"/v1/chat/completions", "application/json", body)
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +357,7 @@ func TestPersistsStructuredRequest(t *testing.T) {
 	resp.Body.Close()
 
 	// Streaming.
-	body = bytes.NewBufferString(`{"model":"claude-sonnet-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	body = bytes.NewBufferString(`{"model":"claude-sonnet-5-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
 	resp, err = http.Post(proxy.URL+"/v1/chat/completions", "application/json", body)
 	if err != nil {
 		t.Fatal(err)
@@ -416,10 +416,10 @@ func TestPersistsStructuredRequest(t *testing.T) {
 
 	// Cost should be computed for both models.
 	if records[0].CostUSD == 0 {
-		t.Errorf("cost not computed for gpt-5.5-mini: %+v", records[0])
+		t.Errorf("cost not computed for gpt-6-luna: %+v", records[0])
 	}
 	if records[1].CostUSD == 0 {
-		t.Errorf("cost not computed for claude-sonnet-5: %+v", records[1])
+		t.Errorf("cost not computed for claude-sonnet-5-5: %+v", records[1])
 	}
 
 	// Error path also persists.

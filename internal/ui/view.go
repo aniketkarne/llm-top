@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
-	"github.com/aniketkarne-com/llm-top/internal/anomaly"
+	ring "github.com/aniketkarne/llm-top/internal/buffer"
+	"github.com/aniketkarne/llm-top/internal/anomaly"
 )
 
 // RenderView produces the full Step 7 dashboard: header with banner,

@@ -12,8 +12,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
-	"github.com/aniketkarne-com/llm-top/internal/session"
+	"github.com/aniketkarne/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/session"
 )
 
 // Session mirrors session.Session on the sqlite build so callers can

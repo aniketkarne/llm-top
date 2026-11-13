@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/anomaly"
+	"github.com/aniketkarne/llm-top/internal/anomaly"
 )
 
 // AnomalySource is how the UI learns about live anomalies. The proxy

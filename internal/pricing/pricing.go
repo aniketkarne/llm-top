@@ -20,19 +20,31 @@ type Table struct {
 	rates map[string]Rate
 }
 
-// Defaults returns the built-in pricing table. As of 2026-09-13 the
-// covered models are:
+// Defaults returns the built-in pricing table. Prices verified
+// 2026-11-13 against the OpenAI and Anthropic published price sheets.
+// The set is deliberately small: anything not listed renders "$?" and
+// users add it via Table.With or the --pricing CLI flag — a stale row
+// is worse than a missing one. Re-verify every row at each release.
 //
-//	gpt-5.5        $5.00 in  / $30.00 out per 1M
-//	gpt-5.5-mini   $0.50 in  /  $2.00 out per 1M
-//	claude-sonnet-5 $2.00 in  / $10.00 out per 1M
+//	gpt-6-luna        $0.10 in  /  $0.50 out per 1M
+//	gpt-6.1-terra     $1.00 in  /  $5.00 out per 1M
+//	gpt-6.1-sol       $2.00 in  / $10.00 out per 1M
+//	claude-haiku-5-5  $0.10 in  /  $0.50 out per 1M (prompts up to 100K tokens; $0.50/$2.50 above)
+//	claude-sonnet-5-5 $2.00 in  / $10.00 out per 1M
+//	claude-opus-5-5   $4.00 in  / $20.00 out per 1M
 //
-// No 4o or older models are included by design.
+// Model keys are the provider-native API ids, matched exactly — no
+// substring or alias matching, so a dotted or vendor-prefixed
+// spelling (e.g. anthropic/claude-sonnet-5-5) shows "$?" instead of
+// guessing a price.
 func Defaults() Table {
 	return Table{rates: map[string]Rate{
-		"gpt-5.5":         {InputPer1M: 5.00, OutputPer1M: 30.00},
-		"gpt-5.5-mini":    {InputPer1M: 0.50, OutputPer1M: 2.00},
-		"claude-sonnet-5": {InputPer1M: 2.00, OutputPer1M: 10.00},
+		"gpt-6-luna":        {InputPer1M: 0.10, OutputPer1M: 0.50},
+		"gpt-6.1-terra":     {InputPer1M: 1.00, OutputPer1M: 5.00},
+		"gpt-6.1-sol":       {InputPer1M: 2.00, OutputPer1M: 10.00},
+		"claude-haiku-5-5":  {InputPer1M: 0.10, OutputPer1M: 0.50},
+		"claude-sonnet-5-5": {InputPer1M: 2.00, OutputPer1M: 10.00},
+		"claude-opus-5-5":   {InputPer1M: 4.00, OutputPer1M: 20.00},
 	}}
 }
 

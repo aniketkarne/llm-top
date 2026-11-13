@@ -28,11 +28,11 @@ import (
 	"net/http"
 	"time"
 
-	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
-	"github.com/aniketkarne-com/llm-top/internal/metrics"
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
-	"github.com/aniketkarne-com/llm-top/internal/redactor"
-	"github.com/aniketkarne-com/llm-top/internal/ui"
+	ring "github.com/aniketkarne/llm-top/internal/buffer"
+	"github.com/aniketkarne/llm-top/internal/metrics"
+	"github.com/aniketkarne/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/redactor"
+	"github.com/aniketkarne/llm-top/internal/ui"
 )
 
 // Options configures the demo. Zero values get sensible defaults.

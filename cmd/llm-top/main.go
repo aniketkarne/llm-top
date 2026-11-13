@@ -27,20 +27,20 @@ import (
 	"text/tabwriter"
 	"time"
 
-	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
-	"github.com/aniketkarne-com/llm-top/internal/anomaly"
-	"github.com/aniketkarne-com/llm-top/internal/compare"
-	"github.com/aniketkarne-com/llm-top/internal/config"
-	"github.com/aniketkarne-com/llm-top/internal/demo"
-	"github.com/aniketkarne-com/llm-top/internal/metrics"
-	"github.com/aniketkarne-com/llm-top/internal/pricing"
-	"github.com/aniketkarne-com/llm-top/internal/prom"
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
-	"github.com/aniketkarne-com/llm-top/internal/redactor"
-	"github.com/aniketkarne-com/llm-top/internal/replay"
-	"github.com/aniketkarne-com/llm-top/internal/session"
-	"github.com/aniketkarne-com/llm-top/internal/store"
-	"github.com/aniketkarne-com/llm-top/internal/ui"
+	ring "github.com/aniketkarne/llm-top/internal/buffer"
+	"github.com/aniketkarne/llm-top/internal/anomaly"
+	"github.com/aniketkarne/llm-top/internal/compare"
+	"github.com/aniketkarne/llm-top/internal/config"
+	"github.com/aniketkarne/llm-top/internal/demo"
+	"github.com/aniketkarne/llm-top/internal/metrics"
+	"github.com/aniketkarne/llm-top/internal/pricing"
+	"github.com/aniketkarne/llm-top/internal/prom"
+	"github.com/aniketkarne/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/redactor"
+	"github.com/aniketkarne/llm-top/internal/replay"
+	"github.com/aniketkarne/llm-top/internal/session"
+	"github.com/aniketkarne/llm-top/internal/store"
+	"github.com/aniketkarne/llm-top/internal/ui"
 )
 
 // version is set via -ldflags at build time.
@@ -964,15 +964,19 @@ func buildCompareTargets(targetFlag string, local bool, modelOverride string) ([
 	} else {
 		// Env defaults so `compare <id> --local` does something useful
 		// even without any --target flags.
-		if v := os.Getenv("LLMTOP_TARGET_GPT55"); v != "" {
-			t, err := parseCompareTarget("gpt-5.5="+v, modelOverride)
+		v := os.Getenv("LLMTOP_TARGET_GPT")
+		if v == "" {
+			v = os.Getenv("LLMTOP_TARGET_GPT55") // legacy spelling of the same knob
+		}
+		if v != "" {
+			t, err := parseCompareTarget("gpt-6-luna="+v, modelOverride)
 			if err != nil {
 				return nil, err
 			}
 			targets = append(targets, t)
 		}
 		if v := os.Getenv("LLMTOP_TARGET_CLAUDE"); v != "" {
-			t, err := parseCompareTarget("claude-sonnet-5="+v, modelOverride)
+			t, err := parseCompareTarget("claude-sonnet-5-5="+v, modelOverride)
 			if err != nil {
 				return nil, err
 			}
@@ -982,12 +986,12 @@ func buildCompareTargets(targetFlag string, local bool, modelOverride string) ([
 		if len(targets) == 0 {
 			if k := os.Getenv("OPENAI_API_KEY"); k != "" {
 				targets = append(targets, compare.Target{
-					Name: "gpt-5.5", BaseURL: "https://api.openai.com/v1", APIKey: k, Model: "gpt-5.5",
+					Name: "gpt-6-luna", BaseURL: "https://api.openai.com/v1", APIKey: k, Model: "gpt-6-luna",
 				})
 			}
 			if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
 				targets = append(targets, compare.Target{
-					Name: "claude-sonnet-5", BaseURL: "https://api.anthropic.com/v1", APIKey: k, Model: "claude-sonnet-5",
+					Name: "claude-sonnet-5-5", BaseURL: "https://api.anthropic.com/v1", APIKey: k, Model: "claude-sonnet-5-5",
 				})
 			}
 		}

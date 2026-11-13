@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	ring "github.com/aniketkarne-com/llm-top/internal/buffer"
-	"github.com/aniketkarne-com/llm-top/internal/metrics"
-	"github.com/aniketkarne-com/llm-top/internal/redactor"
-	"github.com/aniketkarne-com/llm-top/internal/sse"
+	ring "github.com/aniketkarne/llm-top/internal/buffer"
+	"github.com/aniketkarne/llm-top/internal/metrics"
+	"github.com/aniketkarne/llm-top/internal/redactor"
+	"github.com/aniketkarne/llm-top/internal/sse"
 )
 
 // BenchmarkSSEParseThroughput exercises the SSE parser against a realistic

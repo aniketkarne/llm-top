@@ -46,8 +46,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aniketkarne-com/llm-top/internal/anomaly"
-	"github.com/aniketkarne-com/llm-top/internal/metrics"
+	"github.com/aniketkarne/llm-top/internal/anomaly"
+	"github.com/aniketkarne/llm-top/internal/metrics"
 )
 
 // AnomalySource is how the prom package observes live anomaly

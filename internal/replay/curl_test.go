@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aniketkarne-com/llm-top/internal/proxy"
+	"github.com/aniketkarne/llm-top/internal/proxy"
 )
 
 func TestCurlCommand_Defaults(t *testing.T) {
